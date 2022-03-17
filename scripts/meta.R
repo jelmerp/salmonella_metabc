@@ -27,6 +27,7 @@ meta <- read_tsv(infile, col_names = c("s_nr", "well", "sampleID")) %>%
                            paste0(s_nr + 2, "-Water"), sampleID),
          treatment_org = gsub("\\d", "", sampleID),
          treatment_org = gsub("-$|^-", "", treatment_org),
+         sampleID = gsub("\\+", "-", sampleID),  # FASTQ file names have '-'s!
          treatment = case_when(treatment_org == "LGG" ~ "L",
                                treatment_org == "PC+S" ~ "S",
                                TRUE ~ treatment_org),
