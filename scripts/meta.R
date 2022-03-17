@@ -20,16 +20,21 @@ outfile <- args[2]     # outfile <- "metadata/meta.tsv"
 
 ## Read and process raw metadata
 meta <- read_tsv(infile, col_names = c("s_nr", "well", "sampleID")) %>%
-  mutate(sampleID = gsub(" |\\+", "-", sampleID),  # Replace spaces and + by underscores
+  mutate(sampleID = gsub(" ", "-", sampleID),  # Replace spaces and + by underscores
          # There is a weird mismatch in the water samples S-numbers and filename nrs,
          # so we add 2:
          sampleID = ifelse(sampleID %in% c("water", "Water"),
                            paste0(s_nr + 2, "-Water"), sampleID),
-         treatment = gsub("\\d", "", sampleID),
-         treatment = gsub("-$|^-", "", treatment),
+         treatment_org = gsub("\\d", "", sampleID),
+         treatment_org = gsub("-$|^-", "", treatment_org),
+         treatment = case_when(treatment_org == "LGG" ~ "L",
+                               treatment_org == "PC+S" ~ "S",
+                               TRUE ~ treatment_org),
+         lacto = ifelse(treatment %in% c("L", "L+S"), TRUE, FALSE),
+         salmo = ifelse(treatment %in% c("S", "L+S"), TRUE, FALSE),
          neg_control = ifelse(treatment == "Water", TRUE, FALSE)) %>%
   arrange(sampleID) %>%
-  select(sampleID, s_nr, treatment, neg_control)
+  select(sampleID, treatment, lacto, salmo, treatment_org, neg_control, s_nr)
 
 ## Print number of samples
 message("\n## Total nr of samples: ", nrow(meta))
