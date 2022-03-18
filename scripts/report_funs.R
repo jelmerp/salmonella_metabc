@@ -354,31 +354,74 @@ taxtitler <- function(ID, tax_df, tax_level = "ASV", omit_id = FALSE) {
 }
 
 ## Plot DivNet diversity
-plot_div <- function(divnet_obj, ps,
-                     div_index = "shannon", covar = "day") {
+plot_div <- function(ps, divnet_obj = NULL,
+                     div_index = "shannon", covar = "treatment",
+                     each_sample = FALSE, ...) {
 
-  meta <- as_tibble(sample_data(ps))
+  if (!is.null(divnet_obj)) {
+    df <- get_divnet(divnet_obj,
+                     meta = as_tibble(sample_data(ps)),
+                     div_index = div_index)
+    ytitle <- paste(div_index, "diversity estimate")
+  
+  } else {
+    df <- get_break(ps)
+    ytitle <- "richness estimate"
+  }
+  
+  if(each_sample == TRUE)
+    p <- plot_div_sample(df, covar, ytitle)
+  else
+    p <- plot_div_box(df, covar, ytitle)
+  
+  return(p)
+}
 
-  divnet_df <- divdf(divnet_obj, meta, div_index) %>%
-    distinct(.data[[covar]], .keep_all = TRUE)
+plot_div_box <- function(df, covar, ytitle) {
+  ggplot(df) +
+    aes(x = .data[[covar]], color = .data[[covar]], y = estimate) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width = 0.1, size = 3) +
+    scale_y_continuous(labels = scales::comma) +
+    labs(x = NULL, y = ytitle, color = covar) +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major.x = element_blank())
+}
 
-  ggplot(divnet_df) +
-    geom_pointrange(aes(x = .data[[covar]], color = .data[[covar]],
-                        y = estimate, ymin = lower, ymax = upper)) +
-    labs(x = NULL,
-         y = paste(div_index, "diversity estimate"),
-         color = covar)
+plot_div_sample <- function(df, covar, ytitle) {
+  ## Make sure samples are sorted by treatment
+  df <- df %>%
+    arrange(.data[[covar]]) %>% 
+    mutate(sampleID = fct_inorder(sampleID))
+  
+  ggplot(df) +
+    aes(x = sampleID, color = treatment) +
+    geom_point(aes(y = estimate)) +
+    geom_errorbar(aes(ymax = estimate + error, ymin = estimate - error)) +
+    scale_y_continuous(labels = scales::comma) +
+    labs(x = NULL, y = ytitle) +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major.x = element_blank(),
+          axis.text.x = element_text(angle = 270)) 
 }
 
 ## Create DivNet diversity dataframe
-divdf <- function(divnet_obj, meta, div_index) {
-  left_join(divnet_obj[[div_index]] %>% summary,
-            meta,
-            by = c("sample_names" = "sample_ID"))
+get_divnet <- function(divnet_obj, meta, div_index) {
+  left_join(meta,
+            divnet_obj[[div_index]] %>% summary,
+            by = c("sampleID" = "sample_names"))
+}
+
+## Create breakaway richness dataframe
+get_break <- function(ps) {
+  left_join(meta(ps),
+            summary(breakaway(ps)),
+            by = c("sampleID" = "sample_names")) %>%
+    filter(!is.nan(upper), !is.nan(lower))
 }
 
 ## Prep modelsummary table of DivNet model results
-mtable_prep <- function(betta_res) {
+modtab_prep <- function(betta_res) {
   res_smr <- as.data.frame(betta_res$table) %>%
     rownames_to_column("term") %>%
     as_tibble()
@@ -400,17 +443,26 @@ mtable_prep <- function(betta_res) {
 }
 
 ## Create modelsummary table of DivNet model results
-mtable_mk <- function(betta_res, model_names = NULL, fmt = 1) {
+modtab <- function(betta_res,
+                   model_names = NULL,
+                   fmt = 1, fontsize_pct = 100,
+                   print_p = TRUE) {
 
-  if (!is.null(betta_res$table)) modelsmr_list <- list(mtable_prep(betta_res))
-  if (is.null(betta_res$table)) modelsmr_list <- map(betta_res, mtable_prep)
+  if (!is.null(betta_res$table)) modelsmr_list <- list(modtab_prep(betta_res))
+  if (is.null(betta_res$table)) modelsmr_list <- map(betta_res, modtab_prep)
 
   names(modelsmr_list) <- model_names
 
+  if (print_p == TRUE) {
+    estim <- "{estimate} (se: {std.error}, p: {p.value}) {stars}"
+  } else {
+    estim <- "{estimate} (se: {std.error}, p: {p.value}) {stars}"
+  }
+  
   tab <- modelsummary(
     modelsmr_list,
     fmt = fmt,
-    estimate = "{estimate} ({std.error}) {stars}",
+    estimate = estim,
     statistic = NULL,
     coef_omit = "Intercept",
     output = "gt"
@@ -421,7 +473,7 @@ mtable_mk <- function(betta_res, model_names = NULL, fmt = 1) {
   tab %>%
     tab_footnote(footnote = p_note,
                  locations = cells_body(rows = 1, columns = 1)) %>%
-    tab_options(table.font.size = pct(90))
+    tab_options(table.font.size = pct(fontsize_pct))
 }
 
 ## Perform differential abundance analysis with DEseq
