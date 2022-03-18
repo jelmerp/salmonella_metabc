@@ -14,13 +14,14 @@ output:
     anchor_sections: true
     df_print: kable
     css: html_page.css
-bibliography: dada_qc.bib
-nocite: '@*'
+bibliography: salmonella.bib
 editor_options: 
   chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
+# nocite: '@*'
+
 knitr::opts_chunk$set(
   echo = FALSE,
   eval = TRUE,
@@ -30,7 +31,7 @@ knitr::opts_chunk$set(
   out.width = "85%"
 )
 knitr::opts_knit$set(root.dir = here::here(),
-                     output.dir = here::here("reports"))
+                     output.dir = here::here("reports/html"))
 ```
 
 ```{r}
@@ -113,13 +114,13 @@ smp_pass <- sample_data(ps)$sampleID
 
 All code used for the analyses can be found in our GitHub repository
 (https://github.com/jelmerp/salmonella_metabc).
-After quality control of FASTQ files with `fastqc` (version 0.11.8, Andrews 2010)
-and `multiqc` (version 1.11, Ewels et al. 2016),
-primers were removed from each read using `cutadapt` (version 3.4, Martin 2011)
+After quality control of FASTQ files with `fastqc` (version 0.11.8, @andrews_fastqc_2010)
+and `multiqc` (version 1.11, @ewels_multiqc_2016),
+primers were removed from each read using `cutadapt` (version 3.4, @martin_cutadapt_2011)
 and read pairs for which a primer was not detected either for the forward or reverse
 read were removed.
 
-The R/Bioconductor package `DADA2` (version 1.16, Callahan et al. 2016) was used
+The R/Bioconductor package `DADA2` (version 1.16, @callahan_dada2_2016) was used
 to generate a count table with counts of each inferred Amplicon Sequence Variation
 (ASV) for each sample
 Briefly, this consisted of the following consecutive steps:
@@ -131,20 +132,20 @@ merging forward and reverse read pairs (`mergePairs()` function),
 creating a sequence table (`makeSequenceTable()` function),
 inferring and removing chimeric ASVs (`removeBimeraDenovo()` function),
 and taxonomic assignment (`assignTaxonomy()` and `addSpecies()` functions)
-using the Silva (Quast et al. 2013) database
+using the Silva (@quast_silva_2013) database
 (version 138.1, available at https://zenodo.org/record/4587955).
 
 Next, several filtering steps were performed:
 ASVs were filtered by length
 (retaining only ASVs with lengths between `r asv_minlen` and `r asv_maxlen` bp),
 contaminants were inferred and removed with the R/Bioconductor package `decontam`
-(version 1.14.0, Davis et al. 2018) using 4 negative control samples,
+(version 1.14.0, @davis_simple_2018) using 4 negative control samples,
 ASVs that had been assigned to the order Chloroplast, the family Mitochondria,
 or the domain Eukaryota were removed,
 and samples with a total ASV count below a 1,000 were removed.
 
 A phylogenetic tree for all ASVs was inferred using the R package `phangorn`
-(version 2.8.1, Schliep 2011).
+(version 2.8.1, @schliep_phangorn_2011).
 
 ### Detailed ASV inference methods
 
