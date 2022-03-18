@@ -1,0 +1,625 @@
+---
+title: |
+  | Alpha diversity -- <br> Ilic Lab metabarcoding data
+pagetitle: "Alpha diversity"
+author: "Jelmer Poelstra (poelstra.1@osu.edu), MCIC Wooster"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: cerulean
+    highlight: kate
+    toc: true
+    toc_float: true
+    fig_caption: true
+    anchor_sections: true
+    df_print: kable
+    css: html_page.css
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  eval = TRUE,
+  cache = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  out.width = "90%"
+)
+
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r}
+source("scripts/phyloseq_fun.R")
+```
+
+```{r}
+## Define input files
+indir <- "results/phyloseq/"
+ps_filt_file <- file.path(indir, "ps_dadatax_filt.rds")
+
+divnet_day_file <- "results/divnet/divnet_day.rds"
+divnet_diet_file <- "results/divnet/divnet_diet.rds"
+divnet_treatment_file <- "results/divnet/divnet_treatment.rds"
+divnet_diet_day_file <- "results/divnet/divnet_diet_day.rds"
+divnet_diet_treatment_file <- "results/divnet/divnet_diet_treatment.rds"
+
+## Load packages
+if (!"pacman" %in% installed.packages()) install.packages("pacman")
+packages <- c("remotes",
+              "tidyverse", "patchwork", "ggpubr", "RColorBrewer",
+              "DT", "kableExtra", "modelsummary", "gt",
+              "phyloseq", "DESeq2", "microbiome",
+              "ampvis2", "breakaway", "DivNet")
+pacman::p_load(char = packages)
+## remotes::install_github("MadsAlbertsen/ampvis2")
+## remotes::install_github("adw96/breakaway")
+## remotes::install_github("adw96/DivNet")
+
+## Settings
+theme_set(theme_bw(base_size = 14))
+```
+
+```{r}
+## Load phyloseq objects
+ps <- readRDS(ps_filt_file)
+
+## Rename `timepoint` to `day`
+day_col_idx <- which(colnames(sample_data(ps)) == "timepoint")
+colnames(sample_data(ps))[day_col_idx] <- "day"
+
+## Rename `diet_comb` to `diet`
+diet_col_idx <- which(colnames(sample_data(ps)) == "diet_comb")
+colnames(sample_data(ps))[diet_col_idx] <- "diet"
+
+## Extract metadata
+meta <- sample_data(ps) %>%
+  as_tibble() %>%
+  select(-conc_ug_ul, -neg_control)
+
+## Phyloseq object with and without ASV1
+ps_noASV1 <- subset_taxa(ps, species != "muciniphila" | is.na(species))
+
+## Proportional transformation
+ps_prop <- transform(ps, "compositional")
+
+## Define colors
+day_cols <- c(brewer.pal(5, "Set2"), "grey80")
+diet_cols <- c(brewer.pal(4, "Set1"), "grey80")
+treatment_cols <- c(brewer.pal(3, "Dark2")[1:2], "grey80")
+```
+
+```{r}
+divnet_day <- readRDS(divnet_day_file)
+divnet_diet <- readRDS(divnet_diet_file)
+divnet_treat <- readRDS(divnet_treatment_file)
+divnet_dd <- readRDS(divnet_diet_day_file)
+divnet_dt <- readRDS(divnet_diet_treatment_file)
+```
+
+<br>
+
+For these analyses, ASV_1 was _not_ excluded.
+
+-----
+
+## Differences in richness {.tabset .tabset-fade .tabset-pills}
+
+Here, we compare species _richness_ (i.e. just the number of taxa)
+estimated with the R package _breakaway_
+([paper](https://onlinelibrary.wiley.com/doi/abs/10.1111/biom.12332),
+[package](https://github.com/adw96/breakaway))
+among days, diets, and treatments.
+
+Note that richness estimation is done on a _per-sample_ basis,
+so we have error bars for each sample:
+
+```{r}
+## Test richness with breakaway
+rich_comb <- left_join(meta,
+                       summary(breakaway(ps)),
+                       by = c("sample_ID" = "sample_names")) %>%
+  mutate(sample_ID = gsub("D6_", "D06_", sample_ID))
+```
+
+<br>
+
+### By day
+
+Model results are shown below the plot;
+there is a significant effect of day with day 1 being higher than all other days.
+
+```{r}
+ggplot(rich_comb,
+       aes(x = sample_ID, color = day)) +
+  geom_point(aes(y = estimate)) +
+  geom_errorbar(aes(ymax = estimate + error, ymin = estimate - error)) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_color_manual(values = day_cols) +
+  labs(x = "sample", y = "estimated richness") +
+  theme(axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank())
+```
+
+```{r}
+bt_day <- betta(formula = estimate ~ day, ses = error, data = rich_comb)
+mtable_mk(bt_day, model_names = "Day")
+```
+
+<br>
+
+----
+
+### By day and diet
+
+This excludes day -1, since there were no diets at that point.
+
+Model results are shown below the plot;
+there are significant effects of day, diet, and the interaction between the two.
+
+```{r}
+## Facet by day and diet
+rich_comb %>%
+  filter(!is.na(diet)) %>% 
+  group_by(day, diet) %>% 
+  mutate(day_id = row_number()) %>%
+  ggplot(aes(x = day_id, color = diet)) +
+  facet_grid(rows = vars(diet), cols = vars(day)) +
+  geom_point(aes(y = estimate)) +
+  geom_errorbar(aes(ymax = estimate + error, ymin = estimate - error)) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_color_manual(values = diet_cols) +
+  labs(x = "sample", y = "estimated richness") +
+  guides(color = "none") +
+  theme(axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank())
+```
+
+```{r}
+bt_diet <- betta(formula = estimate ~ diet * day, ses = error,
+                 data = filter(rich_comb, !is.na(diet)))
+mtable_mk(betta_res = list(bt_day, bt_diet),
+          model_names = c("Day", "Diet * Day"))
+```
+
+<br>
+
+----
+
+### By treatment and diet
+
+This is for day 35 only, since that is the only day with treatment levels.
+
+Model results are shown below the plot;
+there are no significant effects of diet or treatment,
+but there is a significant interaction between the two.
+
+```{r}
+## Day 35 only
+rich_comb %>%
+  filter(day == "D35") %>%
+  group_by(diet, treatment) %>% 
+  mutate(id = row_number()) %>%
+  ggplot(aes(x = id, color = diet)) +
+  facet_grid(rows = vars(diet), cols = vars(treatment)) +
+  geom_point(aes(y = estimate)) +
+  geom_errorbar(aes(ymax = estimate + error, ymin = estimate - error)) +
+  scale_color_manual(values = diet_cols) +
+  labs(x = "sample", y = "estimated richness") +
+  guides(color = "none") +
+  theme(axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank())
+```
+
+```{r}
+bt_treat <- betta(formula = estimate ~ diet * treatment, ses = error,
+                  data = filter(rich_comb, !is.na(treatment)))
+mtable_mk(betta_res = bt_treat,
+          model_names = "Treatment * Diet")
+```
+
+<br>
+
+----
+
+### All model results
+
+```{r}
+mtable_mk(betta_res = list(bt_day, bt_diet, bt_treat),
+          model_names = c("Day", "Diet * Day", "Treatment * Diet"))
+```
+
+<br>
+
+----
+
+### Error correlates?
+
+There is a large amount of variation in the size of the error bars among samples,
+with 15 or so having an order of magnitude larger error bars than the majority.
+
+Does this correlate with sequencing depth or ASV_1 abundance?
+It doesn't seem so...
+
+```{r}
+## Correlate variance with ASV abundance
+rich_comb_corr <- rich_comb %>%
+  mutate(ASV_1 = as.integer(otu_table(ps)[, "ASV_1"]),
+         nseq = sample_sums(ps))
+
+p1 <- ggplot(data = rich_comb_corr,
+             aes(x = nseq, y = error)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred", size = 0.5) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Total ASV count (library size)",
+       y = "Error in richness estimate") +
+  ggpubr::stat_cor(method = "spearman", size = 3, color = "darkred",
+                   label.x.npc = 0.01, label.y.npc = 0.99)
+
+p2 <- ggplot(data = rich_comb_corr,
+             aes(x = ASV_1, y = error)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred", size = 0.5) +
+  scale_x_log10(labels = scales::comma,
+                expand = expansion(mult = c(0, 0.05))) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "ASV_1 abundance",
+       y = NULL) +
+  theme(axis.text.y = element_blank()) +
+  ggpubr::stat_cor(method = "spearman", size = 3, color = "darkred",
+                   label.x.npc = 0.01, label.y.npc = 0.99)
+
+p1 + p2
+```
+
+<br>
+
+----
+
+## Differences in alpha-diversity {.tabset .tabset-fade .tabset-pills}
+
+Here, we compare species _diversity_ estimated with the R package *DivNet*
+([paper](https://academic.oup.com/biostatistics/advance-article/doi/10.1093/biostatistics/kxaa015/5841114),
+[package](https://github.com/adw96/DivNet)).
+
+In contrast to richness (shown above), diversity measures take _evenness in abundance_
+into account, and the Simpson index does so more than the Shannon index.
+
+### By day
+
+Model results are shown below the plot;
+there is a significant effect of day on both the Shannon and Simpson diversities
+but the differences are exactly mirrored:
+Shannon diversity goes down over time like richness (above) but
+with an uptick at day 35 whereas
+Simpson diversity goes up over time with a downtick at day 35.
+
+```{r}
+p_sh <- plot_div(divnet_day, ps, div_index = "shannon", covar = "day") +
+  scale_color_manual(values = day_cols) +
+  guides(color = "none")
+p_si <- plot_div(divnet_day, ps, div_index = "simpson", covar = "day") +
+  scale_color_manual(values = day_cols) +
+  guides(color = "none")
+p_sh + p_si
+```
+
+```{r}
+## https://adw96.github.io/breakaway/articles/diversity-hypothesis-testing.html
+## Alternatively, use DivNet's testDiversity()
+
+## Shannon
+divnet_day_shannon <- data.frame(
+  estimate = summary(divnet_day$shannon)$estimate,
+  error = sqrt(divnet_day$`shannon-variance`)
+  ) %>%
+  merge(meta, ., by.x = "sample_ID", by.y = "row.names")
+
+divnet_day_shannon_res <- betta(formula = estimate ~ day,
+                                ses = error,
+                                data = divnet_day_shannon)
+```
+
+```{r}
+## Simpson
+divnet_day_simpson <- data.frame(
+  estimate = summary(divnet_day$simpson)$estimate,
+  error = sqrt(divnet_day$`simpson-variance`)
+  ) %>%
+  merge(meta, ., by.x = "sample_ID", by.y = "row.names")
+
+divnet_day_simpson_res <- betta(formula = estimate ~ day,
+                                ses = error,
+                                data = divnet_day_simpson)
+```
+
+```{r}
+mtable_mk(betta_res = list(divnet_day_shannon_res, divnet_day_simpson_res),
+          model_names = c("Day - Shannon", "Day - Simpson"), fmt = 3)
+```
+
+<br>
+
+----
+
+### By day and diet
+
+This excludes day -1, since there were no diets at that point.
+
+Model results are shown below the plot; there are significant effect of `day`,
+`diet` and some interactions on both the Shannon and Simpson diversities,
+and like for the analysis of `day` only,
+all estimate signs are flipped between the Shannon and Simpson indices.
+
+```{r}
+covar1 <- "day"
+covar2 <- "diet"
+
+p_sh <- divdf(divnet_dd, meta, "shannon") %>%
+  distinct(.data[[covar1]], .data[[covar2]], .keep_all = TRUE) %>%
+  ggplot() +
+  geom_pointrange(aes(x = .data[[covar1]], color = .data[[covar2]],
+                      y = estimate, ymin = lower, ymax = upper),
+                  position = position_dodge(width = 0.5)) +
+  scale_color_manual(values = diet_cols) +
+  labs(y = paste("Shannon diversity estimate")) +
+  guides(color = "none")
+
+p_si <- divdf(divnet_dd, meta, "simpson") %>%
+  distinct(.data[[covar1]], .data[[covar2]], .keep_all = TRUE) %>% 
+  ggplot() +
+  geom_pointrange(aes(x = .data[[covar1]], color = .data[[covar2]],
+                        y = estimate, ymin = lower, ymax = upper),
+                    position = position_dodge(width = 0.5)) +
+  scale_color_manual(values = diet_cols) +
+  labs(y = paste("Simpson diversity estimate"))
+
+p_sh + p_si +
+  plot_layout(guides = "collect") & theme(legend.position = "top")
+```
+
+```{r}
+## Shannon
+divnet_dd_shannon <- data.frame(
+  estimate = summary(divnet_dd$shannon)$estimate,
+  error = sqrt(divnet_dd$`shannon-variance`)
+  ) %>%
+  merge(meta, ., by.x = "sample_ID", by.y = "row.names")
+
+divnet_dd_shannon_res <- betta(formula = estimate ~ day * diet,
+                                ses = error,
+                                data = divnet_dd_shannon)
+```
+
+```{r}
+## Simpson
+divnet_dd_simpson <- data.frame(
+  estimate = summary(divnet_dd$simpson)$estimate,
+  error = sqrt(divnet_dd$`simpson-variance`)
+  ) %>%
+  merge(meta, ., by.x = "sample_ID", by.y = "row.names")
+
+divnet_dd_simpson_res <- betta(formula = estimate ~ day * diet,
+                               ses = error,
+                               data = divnet_dd_simpson)
+```
+
+```{r}
+mtable_mk(betta_res = list(divnet_dd_shannon_res, divnet_dd_simpson_res),
+          model_names = c("Day * diet - Shannon",
+                          "Day * diet - Simpson"),
+          fmt = 3)
+```
+
+<br>
+
+----
+
+### By treatment and diet
+
+This is for day 35 only, since that is the only day with treatment levels.
+
+Model results are shown below the plot.
+For the Shannon index, there are significant `treatment`, `diet`, and
+interaction effects, but the effects are much weaker than when analyzing
+`day` or `day` and `diet`.
+For the Simpson index, effects are even weaker but still significant for
+diet B and and treatment.
+Once again, all estimate signs are flipped between the Shannon and Simpson indices.
+
+```{r}
+covar1 <- "treatment"
+covar2 <- "diet"
+
+p_sh <- divdf(divnet_dt, meta, "shannon") %>%
+  distinct(.data[[covar1]], .data[[covar2]], .keep_all = TRUE) %>%
+  ggplot() +
+  geom_pointrange(aes(x = .data[[covar1]], color = .data[[covar2]],
+                      y = estimate, ymin = lower, ymax = upper),
+                    position = position_dodge(width = 0.5)) +
+  scale_color_manual(values = diet_cols) +
+  labs(y = paste("Shannon diversity estimate")) +
+  guides(color = "none")
+
+p_si <- divdf(divnet_dt, meta, "simpson") %>%
+  distinct(.data[[covar1]], .data[[covar2]], .keep_all = TRUE) %>% 
+  ggplot() +
+  geom_pointrange(aes(x = .data[[covar1]], color = .data[[covar2]],
+                        y = estimate, ymin = lower, ymax = upper),
+                    position = position_dodge(width = 0.5)) +
+  scale_color_manual(values = diet_cols) +
+  labs(y = paste("Simpson diversity estimate"))
+
+p_sh + p_si +
+    plot_layout(guides = "collect") & theme(legend.position = "top")
+```
+
+```{r}
+## Shannon
+divnet_dt_shannon <- data.frame(
+  estimate = summary(divnet_dt$shannon)$estimate,
+  error = sqrt(divnet_dt$`shannon-variance`)
+  ) %>%
+  merge(meta, ., by.x = "sample_ID", by.y = "row.names")
+
+divnet_dt_shannon_res <- betta(formula = estimate ~ treatment * diet,
+                                ses = error,
+                                data = divnet_dt_shannon)
+```
+
+```{r}
+## Simpson
+divnet_dt_simpson <- data.frame(
+  estimate = summary(divnet_dt$simpson)$estimate,
+  error = sqrt(divnet_dt$`simpson-variance`)
+  ) %>%
+  merge(meta, ., by.x = "sample_ID", by.y = "row.names")
+
+divnet_dt_simpson_res <- betta(formula = estimate ~ treatment * diet,
+                               ses = error,
+                               data = divnet_dt_simpson)
+```
+
+```{r}
+mtable_mk(betta_res = list(divnet_dt_shannon_res, divnet_dt_simpson_res),
+          model_names = c("Treatment * diet - Shannon",
+                          "Treatment * diet - Simpson"),
+          fmt = 3)
+```
+
+<br>
+
+----
+
+### All model results - Shannon
+
+```{r}
+mtable_mk(betta_res = list(divnet_day_shannon_res,
+                           divnet_dd_shannon_res,
+                           divnet_dt_shannon_res),
+          model_names = c("Day",
+                          "Day * diet",
+                          "Day * treatment"),
+          fmt = 3)
+```
+
+<br>
+
+----
+
+### All model results - Simpson
+
+```{r}
+mtable_mk(betta_res = list(divnet_day_simpson_res,
+                           divnet_dd_simpson_res,
+                           divnet_dt_simpson_res),
+          model_names = c("Day",
+                          "Day * diet",
+                          "Day * treatment"),
+          fmt = 3)
+```
+
+<br>
+
+----
+
+## Richness v. sequencing depth {.tabset .tabset-fade .tabset-pills}
+
+### Rarefaction plot
+
+```{r}
+metadata <- data.frame(sample_data(ps), check.names = FALSE)
+asv_table <- data.frame(t(otu_table(ps)), tax_table(ps),
+                        check.names = FALSE)
+ps_amp <- amp_load(asv_table, metadata)
+```
+
+```{r}
+amp_rarecurve(ps_amp, stepsize = 1000, color_by = "day") +
+  labs(x = "Total ASV count (library size)",
+       y = "Number of distinct ASVs (richness)",
+       color = "Day") +
+  scale_x_continuous(expand = c(0, 0), labels = scales::comma) +
+  scale_y_continuous(expand = c(0, 0))
+```
+
+<br>
+
+----
+
+### Correlation
+
+```{r}
+## Check whether sequence depth and total richness are correlated across samples
+divs <- data.frame(total_count = sample_sums(ps),
+                   n_ASV = rowSums(otu_table(ps) != 0))
+
+ggplot(data = divs,
+       aes(x = total_count, y = n_ASV)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred", size = 0.5) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(x = "Total ASV count (sequence depth)",
+       y = "Number of distinct ASVs (richness)") +
+  ggpubr::stat_cor(method = "spearman", size = 3,
+                   label.x.npc = 0.8, label.y.npc = 0.99)
+```
+
+
+```{r}
+## Looks very different after removing ASV_1!
+# divs <- data.frame(total_count = sample_sums(ps_noASV1),
+#                    n_ASV = rowSums(otu_table(ps_noASV1) != 0))
+# 
+# ggplot(data = divs,
+#        aes(x = total_count, y = n_ASV)) +
+#   geom_point() +
+#   geom_smooth(method = "lm") +
+#   labs(x = "Total ASV count (sequence depth)",
+#        y = "Number of distinct ASVs (diversity)") +
+#   ggpubr::stat_cor(method = "spearman", size = 3,
+#                    label.x.npc = 0.75, label.y.npc = 0.9)
+```
+
+<br>
+
+----
+
+## Alpha diversity -- basic _phyloseq_ plots {.tabset .tabset-fade .tabset-pills}
+
+These plots should be seen as an approximation only,
+better estimates of richness and diversity are produced by the _breakaway_ and
+_DivNet_ packages.
+
+"Observed" diversity = richness = the number of distinct ASVs,
+not taking evenness into account.
+
+### Color by diet
+
+```{r}
+plot_richness(ps,
+              x = "day", color = "diet",
+              measures = c("Observed", "Shannon", "Simpson")) +
+  scale_color_manual(values = diet_cols) +
+  theme_bw(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 270),
+        axis.text.y = element_blank())
+```
+
+### Color by treatment
+
+```{r}
+plot_richness(ps,
+              x = "day", color = "treatment",
+              measures = c("Observed", "Shannon", "Simpson")) +
+  scale_color_manual(values = treatment_cols) +
+  theme_bw(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 270),
+        axis.text.y = element_blank())
+```
