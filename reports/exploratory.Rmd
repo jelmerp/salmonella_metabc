@@ -1,0 +1,455 @@
+---
+title: |
+  | Exploratory analysis -- <br> Salmonella project metabarcoding data
+pagetitle: "exploratory"
+author: "Jelmer Poelstra (poelstra.1@osu.edu), MCIC Wooster"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: cerulean
+    highlight: kate
+    toc: true
+    toc_float: true
+    fig_caption: true
+    anchor_sections: true
+    df_print: kable
+    css: html_page.css
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  eval = TRUE,
+  cache = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  out.width = "100%"
+)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r}
+## Load packages
+if (!"pacman" %in% installed.packages()) install.packages("pacman")
+packages <- c("tidyverse", "here",
+              "plotly", "pheatmap", "patchwork",
+              "DT", "kableExtra",
+              "vegan", "phyloseq", #"ape",
+              "DESeq2", "microbiome", "metagenomeSeq",
+              "remotes")
+pacman::p_load(char = packages)
+## remotes::install_github("MadsAlbertsen/ampvis2")
+## remotes::install_github("adw96/breakaway")
+## remotes::install_github("adw96/DivNet")
+```
+
+```{r}
+source(here("scripts/report_funs.R"))
+```
+
+```{r}
+## Define input files
+indir <- here("results/phyloseq/")
+ps_filt_file <- file.path(indir, "ps_dadatax_filt.rds")
+ps_unfilt_file <- file.path(indir, "ps_dadatax_raw.rds")
+```
+
+```{r}
+## DATASET-SPECIFIC SETTINGS
+trt_levels <- c("NC", "L", "S", "L+S")
+trt_cols <- brewer.pal(length(trt_levels), "Set1")
+names(trt_cols) <- trt_levels
+```
+
+```{r}
+## General settings
+set.seed(100)
+theme_set(theme_bw(base_size = 14))
+```
+
+```{r}
+## Load phyloseq objects
+ps_unfilt <- readRDS(ps_unfilt_file)
+ps_raw <- readRDS(ps_filt_file)
+ps <- ps_raw
+```
+
+```{r}
+## Treatment factor levels
+sample_data(ps)$treatment <- factor(sample_data(ps)$treatment,
+                                    levels = trt_levels)
+```
+
+```{r}
+## Phyloseq object for ordination visualization
+ps_prop <- transform(ps_raw, "compositional")
+```
+
+```{r}
+## DESeq object
+dds <- phyloseq_to_deseq2(ps_raw, ~1)
+```
+
+```{r}
+# Extract parts of the phyloseq object
+
+## Metadata
+meta <- sample_data(ps) %>% as.data.frame()
+
+## Counts
+counts <- otu_table(ps_prop) %>% as.data.frame() %>% t()
+
+## Taxonomic assignment df
+tax <- as.data.frame(tax_table(ps)) %>% rownames_to_column("ASV")
+```
+
+```{r}
+## Mean frequencies and counts for each ASV
+freqs_prop <- data.frame(
+  ASV = taxa_names(ps_prop),
+  mean_prop = round(taxa_sums(ps_prop) / nsamples(ps_prop), 5),
+  mean_count = round(taxa_sums(ps) / nsamples(ps))
+  )
+```
+
+<br>
+
+----
+
+## Methods
+
+The R/Bioconductor package `phyloseq` (version 1.38.0, McMurdie and Holmes 2013)
+was used to store the resulting count table, taxonomy table, phylogenetic tree,
+and a metadata table as a single R object and perform a number of downstream analysis,
+such as calculating weighted UniFrac distances among samples,
+performing a Principal Coordinate Analysis (based on UniFrac distances),
+and agglomerating counts at higher taxonomic levels.
+
+We examined overall differences in microbiome composition between treatments
+using a PERMANOVA with the weighted UniFrac distance between samples as the
+responding variable.
+This was done with the `adonis2()` function from the R package `vegan`
+(version 2.5.7, Oksanen et al. 2020).
+
+<br>
+
+------
+
+## Ordination (PCoA)
+
+```{r}
+ord <- ordinate(ps_prop, method = "PCoA",
+               distance = phyloseq::distance(ps_prop, method = "wunifrac"))
+```
+
+### Interactive plots {.tabset .tabset-fade .tabset-pills}
+
+These plots are interactive so you can (1) hover over points and see more info,
+and (2) remove certain categories of point by clicking on the legend.
+
+#### Axis 1 & 2
+
+```{r}
+p <- plot_ordination(ps_prop, ord, color = "treatment") +
+  geom_point(aes(text = paste("Sample ID:", sampleID, "\n",
+                              "Treatment:", treatment, "\n")),
+             size = 2) +
+  scale_color_manual(values = trt_cols)
+ggplotly(p, tooltip = "text")
+```
+
+#### Axis 3 & 4
+
+```{r}
+p <- plot_ordination(ps_prop, ord, color = "treatment", axes = c(3, 4)) +
+  geom_point(aes(text = paste("Sample ID:", sampleID, "\n",
+                              "Treatment:", treatment, "\n")),
+             size = 2) +
+  scale_color_manual(values = trt_cols)
+ggplotly(p, tooltip = "text")
+```
+
+### Static plots {.tabset .tabset-fade .tabset-pills}
+
+#### Axis 1 & 2
+
+```{r}
+plot_ordination(ps_prop, ord, color = "treatment") +
+  geom_point(size = 3) +
+  scale_color_manual(values = trt_cols) +
+  theme(panel.grid.minor = element_blank())
+```
+
+#### Axis 3 & 4
+
+```{r}
+plot_ordination(ps_prop, ord, color = "treatment", axes = c(3, 4)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = trt_cols) +
+  theme(panel.grid.minor = element_blank())
+```
+
+### Plotting ASVs instead of taxa
+
+```{r}
+colorby_columns <- which(colnames(tax_table(ps)) == "phylum")
+ncols <- length(unique(tax_table(ps)[, colorby_columns]))
+mycols <- randomcoloR::distinctColorPalette(ncols)
+
+pdf <- plot_ordination(ps_prop, ord, type = "taxa", justDF = TRUE) %>%
+  rownames_to_column("ASV") %>%
+  merge(., freqs_prop, by = "ASV")
+
+p <- ggplot(pdf) +
+  aes(x = Axis.1, y = Axis.2, color = phylum, size = mean_prop) +
+  geom_point(aes(text = paste("ASV:", ASV, "\n",
+                              "Phylum:", phylum, "\n",
+                              "Class:", class, "\n"))) +
+  scale_color_manual(values = mycols) +
+  labs(size = "Abundance")
+ggplotly(p, tooltip = "text")
+```
+
+<br>
+
+-----
+
+## Permanova  {.tabset .tabset-fade .tabset-pills}
+
+### Across 3 treatments
+
+**Note: Treatment `NC` is excluded here since only one `NC` sample passed.**
+
+```{r}
+ps_foc <- subset_samples(ps_prop, treatment != "NC")
+
+perma_res <- adonis2(UniFrac(ps_foc, weighted = TRUE) ~ treatment,
+                     data = as(sample_data(ps_foc), "data.frame"),
+                     permutations = 10000)
+
+perma_res %>%
+  kable() %>% 
+  kable_styling(full_width = FALSE)
+```
+
+### `L` vs `L+S`
+
+```{r}
+ps_foc <- subset_samples(ps_prop, treatment %in% c("L", "L+S"))
+
+perma_res <- adonis2(UniFrac(ps_foc, weighted = TRUE) ~ treatment,
+                     data = as(sample_data(ps_foc), "data.frame"),
+                     permutations = 10000)
+
+perma_res %>%
+  kable() %>% 
+  kable_styling(full_width = FALSE)
+```
+
+### `S` vs `L+S`
+
+```{r}
+ps_foc <- subset_samples(ps_prop, treatment %in% c("S", "L+S"))
+
+perma_res <- adonis2(UniFrac(ps_foc, weighted = TRUE) ~ treatment,
+                     data = as(sample_data(ps_foc), "data.frame"),
+                     permutations = 10000)
+
+perma_res %>%
+  kable() %>% 
+  kable_styling(full_width = FALSE)
+```
+
+<br>
+
+-----
+
+## Abundance by taxonomic level {.tabset .tabset-fade .tabset-pills}
+
+### Phylum
+
+#### Most abundant phyla
+
+Only showing phyla with a mean proportional abundance higher than 0.1.
+
+```{r}
+ps_foc <- tax_glom(ps_prop, taxrank = "phylum", NArm = FALSE)
+ps_foc <- subset_taxa(ps_foc, taxa_sums(ps_foc) > 0.1)
+
+plot_bar(ps_foc, fill = "phylum") +
+  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
+  labs(x = NULL) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 270))
+```
+
+#### Without Firmicutes
+
+```{r}
+ps_foc <- tax_glom(ps_prop, taxrank = "phylum", NArm = FALSE)
+ps_foc <- subset_taxa(ps_foc, phylum != "Firmicutes" | is.na(phylum))
+
+plot_bar(ps_foc, fill = "phylum") +
+  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.03))) +
+  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
+  labs(x = NULL) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 270))
+```
+
+### Class
+
+Only showing classes with a mean proportional abundance higher than 0.01.
+
+```{r}
+ps_foc <- tax_glom(ps_prop, taxrank = "class", NArm = FALSE)
+ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
+
+plot_bar(ps_foc, fill = "class") +
+  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
+  labs(x = NULL) +
+  theme(axis.text.x = element_text(angle = 270))
+```
+
+### Order
+
+Only showing orders with a mean proportional abundance higher than 0.01.
+
+```{r}
+ps_foc <- tax_glom(ps_prop, taxrank = "order", NArm = FALSE)
+ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
+
+plot_bar(ps_foc, fill = "order") +
+  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
+  labs(x = NULL) +
+  theme(axis.text.x = element_text(angle = 270))
+```
+
+### Family
+
+Only showing families with a mean proportional abundance higher than 0.01.
+
+```{r}
+ps_foc <- tax_glom(ps_prop, taxrank = "family", NArm = FALSE)
+ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
+
+plot_bar(ps_foc, fill = "family") +
+  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
+  labs(x = NULL) +
+  theme(axis.text.x = element_text(angle = 270))
+```
+
+### Genus
+
+Only showing genera with a mean proportional abundance higher than 0.1.
+
+```{r}
+ps_foc <- tax_glom(ps_prop, taxrank = "genus", NArm = FALSE)
+ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
+
+plot_bar(ps_foc, fill = "genus") +
+  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
+  labs(x = NULL) +
+  theme(axis.text.x = element_text(angle = 270))
+```
+
+<br>
+
+------
+
+## Most abundant ASVs {.tabset .tabset-fade .tabset-pills}
+
+In the plot and tables below,
+the "mean proportion" / `mean_prop` of an ASV refers to the mean proportion
+of all ASVs detected in each sample that are assigned to that ASV
+(e.g., if a sample has 1000 ASVs and 100 of them are ASV_1, then ASV_1 has
+a proportion of 0.1 in that sample).
+
+### Abundance heatmap with top-20
+
+Showing the top-20 most abundant ASVs,
+sorted by abundance & starting with the most abundant.
+In the `Table with top-50` tab, you can see which taxa these are.
+
+```{r}
+topASV_df <- merge(freqs_prop, tax_table(ps_prop),
+                   by.x = "ASV", by.y = "row.names") %>%
+  select(-domain) %>% 
+  arrange(desc(mean_prop))
+```
+
+```{r, out.width="80%", fig.height=7}
+plot_heatmap(IDs = topASV_df$ASV[1:20],
+             meta_df = meta, count_mat = counts,
+             groups = "treatment")
+```
+
+### Table with top-50
+
+Containing the top-50 most abundant ASVs.
+
+<br>
+
+```{r}
+make_dt(topASV_df[1:50, ], pageLength = 15)
+```
+
+### ASV abundance distribution
+
+In the plot below, the inset is zoomed-in on the left hand portion of the plot.
+
+```{r, out.width="90%"}
+p1 <- ggplot(data = freqs_prop, aes(x = mean_prop)) +
+  geom_histogram(bins = 500) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = expansion(mult = c(0, .05))) +
+  labs(x = "Mean proportion of an ASV", y = "Number of distinct ASVs")
+
+p2 <- ggplot(data = freqs_prop, aes(x = mean_prop)) +
+  geom_histogram(bins = 500) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 0.015)) + #, ylim = c(0, 50)) +
+  labs(x = "Mean proportion of an ASV", y = "Number of distinct ASVs") +
+  theme_bw(base_size = 11) +
+  theme(plot.background = element_rect(fill = "grey90"),
+        panel.background = element_rect(fill = "grey90"),
+        plot.margin = margin(10, 20, 10, 10, unit = "pt"))
+
+p1 + patchwork::inset_element(p2, 0.4, 0.4, 0.98, 0.99)
+```
+
+<br>
+
+----
+
+## Numbers of distinct ASVs by taxonomic group
+
+### Phylum
+
+```{r, out.width="85%"}
+phylum_order <- tax %>%
+  dplyr::count(phylum, sort = TRUE) %>%
+  pull(phylum)
+
+tax %>% 
+  mutate(phylum = factor(phylum, levels = phylum_order)) %>% 
+  ggplot(aes(x = phylum)) +
+  geom_bar() +
+  scale_y_continuous(expand = expansion(mult = c(0, .05))) +
+  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
+  theme(axis.text.x = element_text(angle = 270))
+```
