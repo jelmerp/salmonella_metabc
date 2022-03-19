@@ -1,7 +1,7 @@
 ---
 title: |
   | Exploratory analysis -- <br> Salmonella project metabarcoding data
-pagetitle: "exploratory"
+pagetitle: "Exploratory analysis"
 author: "Jelmer Poelstra (poelstra.1@osu.edu), MCIC Wooster"
 date: "`r Sys.Date()`"
 output:
@@ -73,8 +73,7 @@ theme_set(theme_bw(base_size = 13))
 ps <- readRDS(ps_file)
 
 ## Treatment factor levels
-sample_data(ps)$treatment <- factor(sample_data(ps)$treatment,
-                                    levels = trt_levels)
+sample_data(ps)$treatment <- factor(sample_data(ps)$treatment, levels = trt_levels)
 ```
 
 ```{r}
@@ -83,17 +82,12 @@ ps_prop <- transform(ps, "compositional")
 ```
 
 ```{r}
-# Extract parts of the phyloseq object
-
-## Metadata
+## Extract parts of the phyloseq object
 meta <- meta(ps)
-## Counts
 counts <- otu_table(ps_prop) %>% as.data.frame() %>% t()
-## Taxonomic assignment df
 tax <- as.data.frame(tax_table(ps)) %>%
   rownames_to_column("ASV") %>%
-  # Avoid very long taxon names
-  mutate(across(everything(), ~ str_trunc(.x, width = 25)))
+  mutate(across(everything(), ~ str_trunc(.x, width = 25))) # Avoid very long taxon names
 ```
 
 ```{r}
