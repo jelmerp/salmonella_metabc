@@ -9,6 +9,7 @@ dir_trim=results/cutadapt/
 dir_asv=results/dada
 dir_ps=results/phyloseq
 dir_tax=results/taxonomy
+dir_divnet=results/divnet
 
 ## Output files
 seqtab="$dir_asv"/seqtab.rds
@@ -58,7 +59,7 @@ done
 sbatch mcic-scripts/qc/multiqc.sh -i results -o "$dir_multiqc"
 
 ## ASV inference w/ dada
-sbatch --mem=32G -c 8 -t 60 "$bin"/dada.R -i "$dir_trim" -o "$dir_asv" -c "$config_dada"
+sbatch --mem=32G -c 8 -t 30 "$bin"/dada.R -i "$dir_trim" -o "$dir_asv" -c "$config_dada"
 sbatch "$bin"/dada_qc.R -i "$dir_asv"/qc/nseq_summary.txt -o "$dir_asv"/qc
 
 ## Assign taxonomy, construct tree, and make phyloseq object
@@ -66,5 +67,9 @@ sbatch "$bin"/tax_assign.sh -i "$seqtab" -o "$tax_dada" -a dada
 sbatch "$bin"/tree_build.R -i "$seqtab" -o "$tree"
 sbatch "$bin"/ps_make.R -s "$seqtab" -x "$tax_dada" -t "$tree" -m "$meta" -o "$ps_raw"
 sbatch "$bin"/ps_filter.R -i "$ps_raw" -o "$ps_filt" -q "$dir_ps"/qc -c "$config_ps"
-
 sbatch "$bin"/ps_agglomtaxa.R -i "$ps_filt" -o "$dir_ps"/glom
+
+## Divnet
+ps_noNC="$dir_ps"/ps_dadatax_filt_noNC.rds
+sbatch scripts/ps_removeNC.R "$ps_filt" "$ps_noNC"
+sbatch -t60 "$bin"/divnet.R -i "$ps_noNC" -o "$dir_divnet" -t "careful" -b 10
