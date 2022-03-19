@@ -1,0 +1,94 @@
+<br>
+
+### {{lev1}} vs {{lev2}} {.tabset .tabset-fade .tabset-pills}
+
+```{r}
+taxrank <- deparse(substitute({{taxrank}}))    # Taxonomic level
+var <- deparse(substitute({{var}}))            # Model variable (factor)
+lev1 <- deparse(substitute({{lev1}}))          # Model factor level 1
+lev2 <- deparse(substitute({{lev2}}))          # Model factor level 1
+x_var <- deparse(substitute({{x_var}}))
+col_var <- deparse(substitute({{col_var}}))  
+
+## For testing
+# taxrank <- "ASV"; var <- "treatment_deseq"; lev1 = "L"; lev2 = "LS"
+# col_var <- "treatment"; x_var <- "treatment"
+
+message("taxrank: ", taxrank, "  // var: ", var,
+        "  // lev1: ", lev1, "  // lev2: ", lev2)
+```
+
+```{r}
+if (taxrank == "ASV") {
+  message("Preparing taxdat for ASVs...")
+  taxdat <- prep_taxrank_asv()
+} else {
+  message("Preparing taxdat for non-ASVs...")
+  taxdat <- prep_taxrank(taxrank)
+}
+res <- run_deseq(taxdat$dds, taxdat$tax, var, lev1, lev2)
+nsig <- nrow(res)
+```
+
+```{r, results='asis'}
+if (nsig > 0) {
+  cat("\n#### Table\n\n")
+} else {
+  cat("\nNo taxa with an adj. p-value below 0.1\n\n")
+}
+```
+
+```{r}
+if (nsig > 0) make_kable(process_res(res, taxrank))
+```
+
+```{r, results='asis'}
+if (nsig > 1) cat("\n\n<br>\n\n-----\n\n")
+```
+
+```{r, results='asis'}
+if (nsig > 0) {
+  cat("\n#### Boxplots\n\n")
+  cat("Boxplots for up to top-5 taxa with an adj. p-value below 0.1:\n\n")
+}
+```
+
+```{r, out.width="75%"}
+if (nsig > 0) {
+  walk(res$ID[1:min(nsig, 5)], plot_abund,
+       x_var = x_var, col_var = col_var,
+       count_mat = taxdat$counts_norm, tax_df = taxdat$tax, meta = taxdat$meta,
+       model_res = res)
+}
+```
+
+```{r, results='asis'}
+if (nsig > 1) cat("\n\n<br>\n\n-----\n\n")
+```
+
+```{r, results='asis'}
+if (nsig > 1) {
+  cat("\n#### Heatmaps\n\n")
+  cat("\n Showing up to top-20 with an adj. p-value below 0.1:\n\n")
+}
+```
+
+```{r}
+if (nsig > 1) {
+  plot_heatmap(res$ID[1:min(nsig, 20)],
+               count_mat = taxdat$counts_norm, meta_df = taxdat$meta,
+               groups = col_var, id_labsize = 8.5,
+               saveplot = TRUE, plot_id = paste0(taxrank, "_", var))
+}
+```
+
+```{r, out.width="90%"}
+if (nsig > 1) {
+  figfile <- here("reports/figs", paste0("heatmap_", taxrank, "_", var, ".png"))
+  knitr::include_graphics(figfile)
+}
+```
+
+```{r, results='asis'}
+cat("\n\n<br>\n\n-----\n\n")
+```

@@ -1,0 +1,402 @@
+---
+title: |
+  | Alpha diversity -- <br> Salmonella project metabarcoding data
+pagetitle: "Alpha diversity"
+author: "Jelmer Poelstra (poelstra.1@osu.edu), MCIC Wooster"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: cerulean
+    highlight: kate
+    toc: true
+    toc_float: true
+    fig_caption: true
+    anchor_sections: true
+    df_print: kable
+    css: html_page.css
+bibliography: salmonella.bib
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  eval = TRUE,
+  cache = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  out.width = "90%"
+)
+
+knitr::opts_knit$set(root.dir = here::here(),
+                     output.dir = here::here("reports/html"))
+```
+
+```{r}
+## Load packages
+if (!"pacman" %in% installed.packages()) install.packages("pacman")
+packages <- c("remotes",
+              "tidyverse",
+              "patchwork", "ggpubr", "RColorBrewer",
+              "DT", "kableExtra", "modelsummary", "gt",
+              "phyloseq", "microbiome", "ampvis2",
+              "breakaway", "DivNet")
+pacman::p_load(char = packages)
+## remotes::install_github("MadsAlbertsen/ampvis2")
+## remotes::install_github("adw96/breakaway")
+## remotes::install_github("adw96/DivNet")
+```
+
+```{r}
+## Source script with functions
+source("scripts/report_funs.R")
+```
+
+```{r}
+## DATASET-SPECIFIC SETTINGS
+trt_lev_all <- c("NC", "L", "S", "L+S")
+trt_col_all <- brewer.pal(length(trt_lev_all), "Set1")
+names(trt_col_all) <- trt_lev_all
+
+trt_lev_noNC <- c("L", "S", "L+S")
+trt_col_noNC <- brewer.pal(4, "Set1")[2:4]
+names(trt_col_noNC) <- trt_lev_noNC
+
+div_measures <- c("Observed", "Shannon", "Simpson")
+```
+
+```{r}
+## General settings
+theme_set(theme_bw(base_size = 14))
+seed <- 100
+set.seed(seed)
+```
+
+```{r}
+## Define input files
+ps_file <- "results/phyloseq/ps_dadatax_filt.rds"
+divnet_res_file <- "results/divnet/divnet_by_ind.rds"
+```
+
+```{r}
+## Load input files
+ps <- readRDS(ps_file)
+divnet_res <- readRDS(divnet_res_file)
+```
+
+```{r}
+## Treatment factor levels
+sample_data(ps)$treatment <- factor(sample_data(ps)$treatment,
+                                    levels = trt_lev_all)
+
+## Extract metadata
+meta <- meta(ps) %>%
+  mutate(sampleID2 = gsub("-", ".", sampleID))  # estimate_richness() will return these names
+```
+
+```{r}
+# Phyloseq counts transformations
+
+## Proportional transformation
+ps_prop <- transform(ps, "compositional")
+
+## Rarefaction after removing the sample with the fewest reads 
+smp_least <- names(sample_sums(ps)[sample_sums(ps) == min(sample_sums(ps))])
+ps_min1 <- subset_samples(ps, sampleID != smp_least)
+sample_data(ps_min1)$treatment <- factor(sample_data(ps_min1)$treatment,
+                                    levels = trt_lev_noNC)
+ps_rar_min1 <- rarefy_even_depth(ps_min1,
+                                 sample.size = min(sample_sums(ps_min1)),
+                                 rngseed = seed, replace = FALSE)
+```
+
+<br>
+
+-----
+
+## Methods
+
+### Summary for manuscript
+
+Taxonomic richness and diversity were first calculated using the `phyloseq`
+`estimate_richness()` function,
+and differences between treatments were tested for using a Kruskal-Wallis test.
+Since these estimates do not correct for biases due to differences in
+sequencing depth (the total number of reads) among samples,
+this was done not only on the raw data but also on a rarefied dataset
+(rarefaction was done with the `phyloseq` `rarefy_even_depth()` function).
+
+Next, we used methods that directly try to account for differences in
+sequencing depth when estimating richness and diversity.
+Specifically, taxonomic richness was estimated for each sample and compared
+between treatments using the R package `breakaway`
+(version 4.7.6, [@willis_estimating_2015; @willis_improved_2017]),
+while alpha-diversity (using the Simpson and Shannon indices)
+was estimated and compared among treatments using the R package `DivNet`
+(version 0.4.0, @willis_estimating_2020).
+
+<br>
+
+-----
+
+## Richness v. sequencing depth {.tabset .tabset-fade .tabset-pills}
+
+### Rarefaction plot
+
+**A good sign is that these plots flatten out even for the samples with fewer**
+**reads (but see also below).**
+
+```{r}
+metadata <- data.frame(sample_data(ps), check.names = FALSE)
+asv_table <- data.frame(t(otu_table(ps)), tax_table(ps),
+                        check.names = FALSE)
+ps_amp <- amp_load(asv_table, metadata)
+```
+
+```{r}
+amp_rarecurve(ps_amp, stepsize = 10, color_by = "treatment") +
+  labs(x = "Total ASV count (library size)",
+       y = "Number of distinct ASVs (richness)",
+       color = "treatment") +
+  scale_color_manual(values = trt_col_all) +
+  scale_x_continuous(expand = c(0, 0), labels = scales::comma) +
+  scale_y_continuous(expand = c(0, 0))
+```
+
+<br>
+
+----
+
+### Correlation plot
+
+**Despite the result above, there is an extremely clear correlation between**
+**sequencing depth and richnes...**
+
+```{r}
+## Check whether sequence depth and total richness are correlated across samples
+divs <- data.frame(total_count = sample_sums(ps),
+                   n_ASV = rowSums(otu_table(ps) != 0)) %>%
+  rownames_to_column("sampleID") %>%
+  left_join(meta(ps), by = "sampleID")
+
+ggplot(divs) +
+  aes(x = total_count, y = n_ASV) +
+  ggpubr::stat_cor(method = "spearman", size = 4,
+                   label.x.npc = 0.2, label.y.npc = 0.99) +
+  geom_point(aes(color = treatment)) +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred", size = 0.5) +
+  scale_color_manual(values = trt_col_all) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(x = "Total ASV count (sequence depth)",
+       y = "Number of distinct ASVs (richness)")
+```
+
+<br>
+
+----
+
+## Alpha diversity with _phyloseq_
+
+"Observed" diversity = richness = the number of distinct ASVs,
+not taking evenness into account.
+
+**No significant differences between treatments were found.**
+
+### Raw data {.tabset .tabset-fade .tabset-pills}
+
+```{r}
+rich_df <- estimate_richness(ps, measures = div_measures) %>%
+  merge(., meta, by.x = "row.names", by.y = "sampleID2")
+```
+
+#### Plot
+
+```{r}
+plot_richness(ps,
+              x = "treatment", color = "treatment",
+              measures = div_measures) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values = trt_col_all) +
+  guides(color = "none")
+```
+
+#### Model: richness (observed) 
+
+```{r}
+kruskal.test(Observed ~ treatment, data = rich_df)
+```
+
+#### Model: Shannon
+
+```{r}
+kruskal.test(Shannon ~ treatment, data = rich_df)
+```
+
+#### Model: Simpson
+
+```{r}
+kruskal.test(Simpson ~ treatment, data = rich_df)
+```
+
+### Rarefied data {.tabset .tabset-fade .tabset-pills}
+
+Used data rarefied to the minimum number of reads
+_after_ throwing away the sample with the least amount of reads,
+which, conveniently, belongs to the `NC` treatment that we can't test anyway.
+
+**No significant differences between treatments were found.**
+
+```{r}
+rich_df <- estimate_richness(ps_rar_min1, measures = div_measures) %>%
+  merge(., meta, by.x = "row.names", by.y = "sampleID2")
+```
+
+#### Plot
+
+```{r}
+plot_richness(ps_rar_min1,
+              x = "treatment", color = "treatment",
+              measures = div_measures) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values = trt_col_noNC) +
+  guides(color = "none")
+```
+
+#### Model: richness (observed) 
+
+```{r}
+kruskal.test(Observed ~ treatment, data = rich_df)
+```
+
+#### Model: Shannon
+
+```{r}
+kruskal.test(Shannon ~ treatment, data = rich_df)
+```
+
+#### Model: Simpson
+
+```{r}
+kruskal.test(Simpson ~ treatment, data = rich_df)
+```
+
+<br>
+
+-----
+
+## Richness with _breakaway_ {.tabset .tabset-fade .tabset-pills}
+
+Here, we compare species _richness_ (i.e. just the number of taxa)
+estimated with the R package _breakaway_
+([paper](https://onlinelibrary.wiley.com/doi/abs/10.1111/biom.12332),
+[package](https://github.com/adw96/breakaway))
+among treatments.
+
+**According to this test, richness is significantly lower for the S treatment**
+**compared to L+S.**
+
+### Boxplot
+
+```{r}
+plot_div(ps_min1, covar = "treatment") +
+  scale_color_manual(values = trt_col_noNC)
+```
+
+### Plot with per-sample error bars
+
+Note that richness estimation is done on a _per-sample_ basis,
+so we can have error bars for each sample:
+
+```{r}
+plot_div(ps_min1, each_sample = TRUE) +
+  scale_color_manual(values = trt_col_noNC)
+```
+
+### Model
+
+```{r}
+## All 3 treatment levels
+rich_res <- get_break(ps_min1) %>% 
+  mutate(treatment = relevel(factor(treatment), ref = c("L+S")))
+
+bt_treat <- betta(formula = estimate ~ treatment, ses = error, data = rich_res)
+
+modtab(bt_treat, model_names = "All treatments")
+```
+
+```{r}
+## L vs L+S
+# rich_res_l <- rich_res %>% filter(treatment %in% c("L", "L+S"))
+# bt_treat_l <- betta(formula = estimate ~ treatment, ses = error, data = rich_res_l)
+# modtab(bt_treat_l, model_names = "Treatment")
+```
+
+<br>
+
+-----
+
+## Alpha diversity with _DivNet_ {.tabset .tabset-fade .tabset-pills}
+
+**According to this test, Simpson diversity is significantly lower for the**
+**S treatment compared to L+S.**
+
+### Boxplot
+
+```{r}
+p_sh <- plot_div(ps_min1, divnet_res, div_index = "shannon", covar = "treatment") +
+  scale_color_manual(values = trt_col_noNC) +
+  guides(color = "none")
+p_si <- plot_div(ps_min1, divnet_res, div_index = "simpson", covar = "treatment") +
+  scale_color_manual(values = trt_col_noNC) +
+  guides(color = "none")
+p_sh + p_si
+```
+
+### Plot with per-sample error bars
+
+Note that richness estimation is done on a _per-sample_ basis,
+so we can have error bars for each sample:
+
+```{r}
+p_sh <- plot_div(ps_min1, divnet_res,
+                 div_index = "shannon", covar = "treatment",
+                 each_sample = TRUE) +
+  scale_color_manual(values = trt_col_noNC) +
+  guides(color = "none")
+p_si <- plot_div(ps_min1, divnet_res,
+                 div_index = "simpson", covar = "treatment",
+                 each_sample = TRUE) +
+  scale_color_manual(values = trt_col_noNC) +
+  guides(color = "none")
+p_sh + p_si
+```
+
+### Model
+
+```{r}
+## Shannon
+shan <- data.frame(estimate = summary(divnet_res$shannon)$estimate,
+                   error = sqrt(divnet_res$`shannon-variance`)) %>%
+  merge(meta(ps_min1), ., by = "row.names") %>%
+  mutate(treatment = relevel(factor(treatment), ref = c("L+S")))
+shan_mod <- betta(formula = estimate ~ treatment, ses = error, data = shan)
+
+## Simpson
+simp <- data.frame(estimate = summary(divnet_res$simpson)$estimate,
+                   error = sqrt(divnet_res$`simpson-variance`)) %>%
+  merge(meta(ps_min1), ., by = "row.names") %>%
+  mutate(treatment = relevel(factor(treatment), ref = c("L+S")))
+simp_mod <- betta(formula = estimate ~ treatment, ses = error, data = simp)
+
+## Print formatted table
+modtab(betta_res = list(shan_mod, simp_mod),
+       model_names = c("Shannon", "Simpson"),
+       fmt = 3)
+```
+
+<br>
+
+----
+
+## References
