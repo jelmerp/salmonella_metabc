@@ -65,7 +65,7 @@ make_kable <- function(df) {
 ## Function to make a boxplot showing abundance of an ASV/genus/etc
 plot_abund <- function(
   ID,
-  x_var = "diet", col_var = "treatment", facet_var = "day",
+  x_var = "diet", col_var = "treatment", facet_var = NULL,
   ps = NULL, count_mat = NULL, meta = NULL, tax_df = NULL,
   model_res = NULL,
   omit_id = FALSE, tax_level = "ASV",
@@ -75,104 +75,66 @@ plot_abund <- function(
 
   # ID <- ald$ID[1]; count_mat = counts; meta = fmeta; x_var = var1; col_var = NULL; facet_var = var2
   # model_res = ald_plot; tax_df = NULL; title_size = 14
+  
   ## If a phyloseq object is provided, take the count data and metadata from there
-
-  message("plot_abund - Chk0")
-
   if (!is.null(ps)) {
     if (is.null(meta)) meta <- sample_data(ps)
     if (is.null(count_mat)) count_mat <- as(t(otu_table(ps)), "matrix")
     if (is.null(tax_df)) tax_df <- as.data.frame(tax_table(ps)[ID, ]) %>% rownames_to_column("ASV")
   }
 
-  message("plot_abund - Chk0")
-
   if (!is.null(facet_var)) {
     if (is.factor(meta[[facet_var]])) meta[[facet_var]] <- droplevels(meta[[facet_var]])
   }
 
-  message("plot_abund - Chk1")
-
   ## Plot title
   plot_title <- taxtitler(ID, tax_df, omit_id = omit_id, tax_level = tax_level)
 
-  message("plot_abund - Chk2")
-
+  ## Create df with data to plot
+  count_df <- data.frame(meta, count = count_mat[ID, ], ID = ID)
+  
   ## Create the main plot
-  p <- data.frame(meta, count = count_mat[ID, ], ID = ID) %>%
-    ggplot(aes(x = .data[[x_var]], y = count)) +
+  p <- ggplot(count_df) +
+    aes(x = .data[[x_var]], y = count) +
     geom_boxplot(outlier.shape = NA) +
     scale_y_continuous(expand = expansion(mult = c(0.05, 0.2))) +
     labs(x = x_var,
          y = "Normalized abundance",
          title = plot_title) +
-    theme(legend.position = "top",
+    theme(legend.position = "right",
           plot.title = element_text(size = title_size, hjust = 0.5),
-          panel.grid.major.x = element_blank())
-
-  message("plot_abund - Chk3")
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 1, 0.5), "cm"))
 
   ## Color points, if needed
   if (!is.null(col_var)) {
     p <- p + geom_point(aes(color = .data[[col_var]]),
                         position = position_jitter(w = 0.1, h = 0),
-                        size = 1.3)
+                        size = 2)
     if (is.null(cols)) p <- p + scale_color_brewer(palette = "Dark2")
     if (!is.null(cols)) p <- p + scale_color_manual(values = cols)
   } else {
     p <- p + geom_point(position = position_jitter(w = 0.1, h = 0),
-                        size = 1.3, color = "grey50")
+                        size = 2, color = "grey50")
   }
-
-  message("plot_abund - Chk4")
 
   ## Create facet, if needed
   if (!is.null(facet_var)) {
     p <- p + facet_wrap(vars(.data[[facet_var]]), labeller = label_both)
   }
 
-  message("plot_abund - Chk5")
-
   ## Add significance
   if (!is.null(model_res)) {
     stat_df <- get_sig(fID = ID, model_res = model_res, facet_var = facet_var)
     p <- p + geom_text(data = stat_df,
                        aes(x = Inf, y = Inf, label = label),
-                       hjust = 1.1, vjust = 1.5, size = 3, color = "darkred")
+                       hjust = 1.1, vjust = 1.5, size = 4, color = "darkred")
   }
-
-  message("plot_abund - Chk6")
 
   ## Save or print plot
   if (saveplot == TRUE) {
     if (is.null(plot_id)) plot_id <- ID else plot_id <- paste0(plot_id, "_", ID)
-    plotfile <- here(plotdir, paste0("boxplot_", plot_id, ".png"))
-    ggsave(plotfile, p)
-    return(plotfile)
-  } else {
-    print(p)
-  }
-}
-
-## Two side-by-side abundance plots
-plot2abund <- function(
-  IDs,
-  action = "print", plotdir = here("reports/figs"), plot_id = NULL,
-  ...) {
-
-  p <- plot_abund(IDs[1], title_size = 11, ...)
-
-  if (length(IDs) == 2) {
-    p2 <- plot_abund(IDs[2], title_size = 11, ...) +
-      labs(y = NULL)
-
-    p <- p + p2 +
-      plot_layout(guides = "collect") &
-      theme(legend.position = "top")
-  }
-
-  if (action == "save") {
-    plot_id <- paste0(plot_id, "_", paste0(IDs, collapse = "_"))
     plotfile <- here(plotdir, paste0("boxplot_", plot_id, ".png"))
     ggsave(plotfile, p)
     return(plotfile)
@@ -190,18 +152,16 @@ get_plot_dims <- function(heat_map) {
 }
 
 ## Heatmap plot showing abundances
-plot_heatmap <- function(
-  IDs,
-  dds = NULL, count_mat = NULL, meta_df = NULL,
-  groups = c("day", "treatment", "diet"),
-  show_rownames = TRUE, show_colnames = FALSE,
-  id_labsize = 10,
-  saveplot = FALSE, plotdir = here("reports/figs"), plot_id = NULL,
-  ...)
-  {
+plot_heatmap <- function(IDs,
+                         dds = NULL, count_mat = NULL, meta_df = NULL,
+                         groups = c("treatment"),
+                         show_rownames = TRUE, show_colnames = FALSE,
+                         id_labsize = 10,
+                         saveplot = FALSE, plotdir = here("reports/figs"),
+                         plot_id = NULL, ...) {
 
   if (!dir.exists(plotdir)) dir.create(plotdir, recursive = TRUE)
-
+  
   ## If a phyloseq object is provided, take the count data and metadata from there
   if (!is.null(dds)) {
     if (is.null(meta_df)) meta_df <- as.data.frame(colData(dds))
@@ -240,56 +200,50 @@ plot_heatmap <- function(
     cluster_rows <- TRUE
   }
 
+  ## Function to create the plot
   pheat <- function(...) {
     pheatmap(
       fcount_mat, annotation_col = fmeta,
       cluster_rows = cluster_rows, cluster_cols = FALSE,
       show_rownames = show_rownames, show_colnames = show_colnames,
-      cellheight = cellheight, fontsize_row = id_labsize,
-      cex = 1
+      cellheight = cellheight,
+      fontsize = 9, fontsize_row = id_labsize, cex = 1
     )
   }
-
+  
   ## Save or print the plot
   if (saveplot == TRUE) {
-
+    
     ## Create the plot - wrap in `png()` call so it doesn't get printed
     setEPS(); postscript(here(plotdir, "tmp.eps"))
     p <- pheat(...)
     plot_dims <- get_plot_dims(p)
     invisible(dev.off())
-
+    
     ## Determine filename
     if (is.null(plot_id)) {
       plot_id <- str_trunc(paste(IDs, collapse = "_"), width = 40, ellipsis = "")
     }
-
+    
     plotfile <- here(plotdir, paste0("heatmap_", plot_id, ".png"))
     ggsave(plotfile, p,
            height = plot_dims$height, width = plot_dims$width, units = "in")
-    } else {
-      print(pheat())
+  } else {
+    print(pheat())
   }
 }
 
 ## Get df to add significance to abundance plot
 get_sig <- function(fID, model_res, facet_var) {
-  message("Chk0")
-
   fres_all <- model_res %>% dplyr::filter(ID == fID)
-
-  message("Chk1")
-
   fres_sig <- fres_all %>% dplyr::filter(padj < 0.1)
-
-  message("Chk2")
 
   onelab <- function(i) {
     padjs <- format(fres_sig$padj[i], digits = 3, scientific = TRUE)
-    if ("model" %in% colnames(fres_sig)) {
-      paste0(fres_sig$model[i], " - ", fres_sig$term[i], ": ", padjs)
+    if ("model" %in% colnames(fres_sig) & "term" %in% colnames(fres_sig)) {
+      paste0(fres_sig$model[i], " - ", fres_sig$term[i], ": p=", padjs)
     } else {
-      paste0(fres_sig$term[i], ": ", padjs)
+      paste0(fres_sig$term[i], ": p=", padjs)
     }
   }
 
@@ -298,8 +252,6 @@ get_sig <- function(fID, model_res, facet_var) {
   } else {
     plab <- "(No significant terms)"
   }
-
-  message("Chk3")
 
   if (!is.null(facet_var)) {
     fac_var <- meta[[facet_var]]
@@ -310,8 +262,6 @@ get_sig <- function(fID, model_res, facet_var) {
     stat_df <- data.frame(label = plab)
   }
 
-  message("Chk4")
-
   return(stat_df)
 }
 
@@ -320,10 +270,12 @@ taxtitler <- function(ID, tax_df, tax_level = "ASV", omit_id = FALSE) {
 
   if (!is.null(tax_df)) {
 
-    if (tax_level == "ASV") tax_names <- tax_df[[tax_level]]
-    if (tax_level != "ASV") tax_names <- janitor::make_clean_names(tax_df[[tax_level]])
+    #if (tax_level == "ASV") tax_names <- tax_df[[tax_level]]
+    #if (tax_level != "ASV") tax_names <- janitor::make_clean_names(tax_df[[tax_level]])
 
-    tax_row <- which(tax_names == ID)
+    #tax_row <- which(tax_names == ID)
+    tax_row <- which(tax_df$ID == ID)
+    
     if (tax_level %in% c("genus", "family", "order", "class")) tax_df$species <- NA
     if (tax_level %in% c("family", "order", "class")) tax_df$genus <- NA
     if (tax_level %in% c("order", "class")) tax_df$family <- NA
@@ -476,20 +428,26 @@ modtab <- function(betta_res,
     tab_options(table.font.size = pct(fontsize_pct))
 }
 
-## Perform differential abundance analysis with DEseq
-da_deseq <- function(ps, dds) {
-  dds <- DESeq(dds)
-  res <- results(dds)
-  print(summary(res))
+mk_deseq <- function(counts, meta, design = "~1") {
+  design <- as.formula(paste("~", design))
+  dds <- DESeqDataSetFromMatrix(counts, meta, design = design)
+}
 
-  res_sig <- as.data.frame(res) %>%
-    merge(., tax_table(ps), by = "row.names") %>%
-    dplyr::rename(ASV = Row.names, LFC = log2FoldChange) %>%
-    merge(., freqs_prop, by = "ASV") %>%
-    select(-stat, -pvalue, -lfcSE, -domain) %>%
-    mutate(baseMean = round(baseMean, 2), LFC = round(LFC, 2)) %>%
+run_deseq <- function(dds, tax, fac, lev1, lev2) {
+  # counts=taxdat$counts; tax=taxdat$tax; fac="treatment_deseq"; lev1="LS"; lev2="L"
+  
+  design(dds) <- as.formula(paste("~", fac))
+  deseq_res <- DESeq(dds)
+  
+  results(deseq_res, contrast = c(fac, lev1, lev2)) %>%
+    as.data.frame() %>% 
+    merge(., tax, by.x = "row.names", by.y = "ID") %>%
+    dplyr::rename(ID = Row.names, LFC = log2FoldChange) %>%
+    dplyr::select(-stat, -pvalue, -lfcSE) %>%
+    mutate(baseMean = round(baseMean, 2),
+           LFC = round(LFC, 2),
+           term = paste(lev1, "vs.", lev2)) %>%
     arrange(padj) %>%
-    filter(padj < 0.1)
-
-  return(res_sig)
+    filter(padj < 0.1) %>%
+    relocate(term)
 }
