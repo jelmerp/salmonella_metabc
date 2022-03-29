@@ -1,7 +1,8 @@
 #!/usr/bin/env Rscript
 
-# SBATCH --account=PAS0471
-# SBATCH --time=5
+#SBATCH --account=PAS0471
+#SBATCH --time=5
+#SBATCH --output=slurm-removeNC-%j.out
 
 ## Report
 message("\n## Starting script ps_removeNC.R")
