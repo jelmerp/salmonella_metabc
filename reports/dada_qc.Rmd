@@ -1,7 +1,7 @@
 ---
 title: |
   | Methods and QC -- <br> Salmonella project metabarcoding data
-pagetitle: "dada_qc"
+pagetitle: "dada QC"
 author: "Jelmer Poelstra (poelstra.1@osu.edu), MCIC Wooster, OSU"
 date: "`r Sys.Date()`"
 output:
@@ -20,8 +20,6 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
-# nocite: '@*'
-
 knitr::opts_chunk$set(
   echo = FALSE,
   eval = TRUE,
@@ -51,9 +49,14 @@ source(here("scripts/report_funs.R"))
 
 ```{r}
 ## DATASET-SPECIFIC SETTINGS
-asv_minlen <- 245
-asv_maxlen <- 260
+ASV_MINLEN <- 245
+ASV_MAXLEN <- 260
+MIN_COUNT <- 100
 
+## DATASET-SPECIFIC RESULTS
+N_ASV_RM <- 14
+
+## Settings for this doc
 trt_levels <- c("NC", "L", "S", "L+S", "Water")
 trt_cols <- brewer.pal(length(trt_levels), "Set1")
 names(trt_cols) <- trt_levels
@@ -137,12 +140,12 @@ using the Silva (@quast_silva_2013) database
 
 Next, several filtering steps were performed:
 ASVs were filtered by length
-(retaining only ASVs with lengths between `r asv_minlen` and `r asv_maxlen` bp),
+(retaining only ASVs with lengths between `r ASV_MINLEN` and `r ASV_MAXLEN` bp),
 contaminants were inferred and removed with the R/Bioconductor package `decontam`
 (version 1.14.0, @davis_simple_2018) using 4 negative control samples,
 ASVs that had been assigned to the order Chloroplast, the family Mitochondria,
 or the domain Eukaryota were removed,
-and samples with a total ASV count below a 1,000 were removed.
+and samples with a total ASV count below a `r MIN_COUNT` were removed.
 
 A phylogenetic tree for all ASVs was inferred using the R package `phangorn`
 (version 2.8.1, @schliep_phangorn_2011).
@@ -158,8 +161,8 @@ R/Bioconductor package `DADA2` (version 1.16,
 and were used with default parameters.
 
 1. FASTQ files were filtered and trimmed using the `filterAndTrim()` function
-   with parameters `truncLen = c(150, 150)`, `trimLeft = 0`, `trimRight = 0`,
-   `maxN = 0`, `maxEE = c(2, 2)`, `truncQ = 2`, and `rm.phix = TRUE`.
+   with parameters `truncLen = c(140, 130)`, `trimLeft = 0`, `trimRight = 0`,
+   `maxN = 0`, `maxEE = Inf`, `truncQ = 2`, and `rm.phix = TRUE`.
 
 2. Sequences from filtered FASTQ files were dereplicated using the `derepFastq()`
    function.
@@ -180,8 +183,8 @@ and were used with default parameters.
    function with the parameter `method = "pool"`.
    
 8. ASVs were filtered by length,
-   with minimum and maximum permitted sizes of `r asv_minlen` and `r `asv_maxlen`
-   bp, respectively.
+   with minimum and maximum permitted sizes of `r ASV_MINLEN` and
+   `r ASV_MAXLEN` bp, respectively.
 
 9. Taxonomy was assigned using the `assignTaxonomy()` function followed by
    the `addSpecies()` function, with the Silva version 138.1 database
@@ -212,8 +215,30 @@ and were used with default parameters.
 13. ASVs assigned to the order Chloroplast, the family Mitochondria,
     or the domain Eukaryota were removed.
     
-14. Samples with a total ASV count below a 1,000 were removed.
+14. Samples with a total ASV count below a `r MIN_COUNT` were removed.
 
+<br>
+
+----
+
+## Data filtered out
+
+```{r}
+failed <- qc_raw %>%
+  filter(lenfilter < MIN_COUNT) %>%
+  select(sampleID, input, output = lenfilter)
+
+nfail <- nrow(failed)
+```
+
+Not shown in the graphs below:
+
+- **Cutadapt results are currently not reported.**
+- In step 12, no ASVs were identified as contaminants.
+- In step 13, no off-target taxa were detected.
+- In step 14, `r nfail` samples with fewer than `r MIN_COUNT` reads were removed.
+  This also led to the removal of `r N_ASV_RM` ASVs that were no longer present
+  in the dataset after removing the low-count samples.
 
 <br>
 
@@ -221,19 +246,10 @@ and were used with default parameters.
 
 ## Samples filtered out
 
-```{r}
-failed <- qc_raw %>%
-  filter(lenfilter < 1000) %>%
-  select(sampleID, input, output = lenfilter)
-
-nfail <- nrow(failed)
-```
-
-In step 14,
-**`r nfail` samples had fewer than 1,000 total ASVs and were removed.**
-Among these, the maximum number of ASVs was in fact as low as
-`r max(failed$output)`, so it seems to me that lowering this threshold
-to retain more samples is not reasonable.
+Among the `r nfail` samples removed with fewer than `r MIN_COUNT` reads,
+the maximum number of ASVs was as low as `r max(failed$output)`,
+so it seems to me that lowering this threshold to retain more samples is not
+reasonable.
 
 ```{r}
 ## Table of failed samples by treatment
@@ -260,12 +276,6 @@ cat(paste0(failed$sampleID, collapse = ", "))
 ----
 
 ## Read loss along the pipeline
-
-Not shown in the graphs below:
-
-- **Cutadapt results are currently not reported.**
-- In step 12, no ASVs were identified as contaminants.
-- In step 13, no off-target taxa were detected.
 
 ### Read loss for all samples
 
@@ -344,7 +354,7 @@ qc_for_barplot %>%
 ### Barplot of remaining reads -- passed samples
 
 Showing the number of remaining reads (which are ASVs at that point)
-after the entire ASV inference pipeline for _passed samples_ (>=1,000 reads).
+after the entire ASV inference pipeline for _passed samples_ (>=`r MIN_COUNT` reads).
 
 ```{r}
 qc_for_barplot %>%
@@ -363,7 +373,7 @@ qc_for_barplot %>%
 ### Barplot of remaining reads -- failed samples
 
 Showing the number of remaining reads (which are ASVs at that point)
-after the entire ASV inference pipeline for _failed samples_ (<1,000 reads).
+after the entire ASV inference pipeline for _failed samples_ (<`r MIN_COUNT` reads).
 
 ```{r}
 qc_for_barplot %>%

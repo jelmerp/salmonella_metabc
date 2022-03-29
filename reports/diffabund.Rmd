@@ -56,11 +56,11 @@ ps_file <- here("results/phyloseq/ps_dadatax_filt.rds")
 
 ```{r}
 ## DATASET-SPECIFIC SETTINGS
-trt_lev_deseq <- c("LS", "L", "S")   # Deseq would replace the `+` by a `.`
-trt_lev_mod <- c("L+S", "L", "S")
-trt_lev_plot <- c("L", "S", "L+S")
+trt_lev_deseq <- c("NC", "L", "S", "LS")   # Deseq would replace the `+` by a `.`
+trt_lev_plot <- c("NC", "L", "S", "L+S")
 trt_cols <- brewer.pal(length(trt_lev_plot), "Set1")
 names(trt_cols) <- trt_lev_plot
+
 focal_var <- "treatment_deseq"       # Focal variable
 
 ## Prevalence thresholds - features that do not pass these thresholds are excluded from for statistical testing
@@ -82,74 +82,62 @@ ps <- readRDS(ps_file)
 ```
 
 ```{r}
-## Remove sample with fewest count, which is the only in the NC treatment
-smp_least <- names(sample_sums(ps)[sample_sums(ps) == min(sample_sums(ps))])
-ps_min1 <- subset_samples(ps, sampleID != smp_least)
-```
+## Remove "orphan samples" -- only one for a given factor
+# fct_counts <- table(sample_data(ps)$treatment)
+# if (any(fct_counts == 1)) {
+#   fct_remove <- names(which(fct_counts == 1))
+#   ps <- subset_samples(ps, treatment != fct_remove)
+# }
 
-```{r}
-## Set focal phyloseq object
-ps <- ps_min1
+## If wanting to remove the sample with the lowest nr of counts:
+#smp_least <- names(sample_sums(ps)[sample_sums(ps) == min(sample_sums(ps))])
+#ps_min1 <- subset_samples(ps, sampleID != smp_least)
 ```
 
 ```{r}
 ## Metadata
 meta <- meta(ps) %>%
   mutate(treatment_deseq = factor(sub("\\+", "", treatment), trt_lev_deseq),
-         treatment = factor(treatment, levels = trt_lev_mod),
-         treatment_plot = factor(treatment, levels = trt_lev_plot))
+         treatment = factor(treatment, levels = trt_lev_plot))
+         #treatment_plot = factor(treatment, levels = trt_lev_plot))
 ```
 
 ```{r}
 ## Prepare a list with data for a focal taxonomic level
 prep_taxrank <- function(taxrank) {
   
+  ## Agglomerate ps object
   if (taxrank != "ASV") ps <- tax_glom(ps, taxrank = taxrank, NArm = TRUE)
 
+  ## Get counts and subset to features with sufficient prevalence
   counts <- t(otu_table(ps)) %>% as(., "matrix") %>% round()
   counts <- counts[apply(counts, 1, prev_fun), ]
   
-  dds <- mk_deseq(counts, meta)
-  dds <- estimateSizeFactors(dds)
-  
-  counts_norm <- sweep(counts, 2, sizeFactors(dds), "/")
-  
+  ## Get a taxonomy df
   tax <- as.data.frame(tax_table(ps)) %>%
     rownames_to_column("ID") %>%
     dplyr::select(-domain) %>% 
     filter(ID %in% row.names(counts))
 
+  ## Change `ASV_x` ID to the taxon name, if taxrank is not ASV
+  if (taxrank != "ASV") {
+    tax$ID <- janitor::make_clean_names(tax[[taxrank]])
+    row.names(counts) <- tax$ID
+  }
+
+  ## Metadata
   meta <- meta
+  
+  ## Create a DESeq object
+  dds <- mk_deseq(counts, meta)
+  dds <- estimateSizeFactors(dds)
+  
+  ## Normalized counts
+  counts_norm <- sweep(counts, 2, sizeFactors(dds), "/")
+  if (taxrank != "ASV") row.names(counts_norm) <- tax$ID
   
   return(list(ps = ps, dds = dds, counts_norm = counts_norm,
               tax = tax, meta = meta))
-}
-```
-
-```{r}
-## Running DESeq at the ASV level returns an error ('every gene contains at least one zero')
-## Therefore, we first filter the data to make sure this is no longer the case
-prep_taxrank_asv <- function() {
-  counts <- t(otu_table(ps)) %>% as(., "matrix") %>% round()
-  counts <- counts[apply(counts, 1, prev_fun), ]
-  
-  asv_w_least_miss <- names(sort(apply(counts, 1, function(x) sum(x == 0))))[1]
-  samp_miss <- which(counts[asv_w_least_miss, ] == 0)
-  counts2 <- counts[, -samp_miss]
-  meta2 <- meta %>% filter(! sampleID %in% names(samp_miss))
-  dds <- mk_deseq(counts2, meta2)
-  dds <- estimateSizeFactors(dds)
-    
-  counts_norm <- sweep(counts2, 2, sizeFactors(dds), "/")
-    
-  tax <- as.data.frame(tax_table(ps)) %>%
-    rownames_to_column("ID") %>%
-    dplyr::select(-domain) %>%
-    filter(ID %in% row.names(counts))
-  
-  taxdat <- list(ps = ps, dds = dds, counts_norm = counts_norm,
-                 tax = tax, meta = meta2)
-  return(taxdat)
 }
 ```
 
@@ -169,12 +157,14 @@ process_res <- function(res, taxrank) {
 ## Create a report section from template file - ASV level
 make_section <- function(taxrank, lev1, lev2,
                          var = focal_var,
-                         x_var = "treatment", col_var = "treatment") {
+                         x_var = "treatment", col_var = "treatment",
+                         end_of_section = FALSE) {
   
   src <- knitr::knit_expand(file = tmpl_file,
                             taxrank = taxrank,
                             lev1 = lev1, lev2 = lev2,
-                            var = var, x_var = x_var, col_var = col_var)
+                            var = var, x_var = x_var, col_var = col_var,
+                            end_of_section = end_of_section)
   
   res <- knitr::knit_child(text = src, quiet = TRUE)
   
@@ -208,13 +198,13 @@ differential abundance analysis.
 ### Additional notes
 
 - I am reporting all features with a (Benjamini-Hochberg) multiple-testing
-  corrected p-value below 0.1.
+  corrected p-value (**which is denoted here with `padj`**) below 0.1.
   
 - A heatmap for a given comparison is only shown if at least two features
   have a corrected p-value below 0.1.
 
-- **DESeq can be sensitive to outliers (when there are 2 or more) and**
-  **looking at the boxplots, **
+- **DESeq is sensitive to generating false positives when there are two or**
+  **more outliers, and looking at the boxplots, **
   **I think most of the significantly differentially abundant ASVs don't look**
   **too exciting, but there seem to be are some more genuine differences at**
   **higher taxonomic levels.**
@@ -231,40 +221,45 @@ differential abundance analysis.
 
 ```{r, results='asis'}
 taxrank <- "ASV"
-make_section(taxrank, "L", "LS")
-make_section(taxrank, "S", "LS")
+make_section(taxrank, "NC", "S")
+make_section(taxrank, "NC", "L")
+make_section(taxrank, "S", "LS", end_of_section = TRUE)
 ```
 
 ## Genus level
 
 ```{r, results='asis'}
 taxrank <- "genus"
-make_section(taxrank, "L", "LS")
-make_section(taxrank, "S", "LS")
+make_section(taxrank, "NC", "S")
+make_section(taxrank, "NC", "L")
+make_section(taxrank, "S", "LS", end_of_section = TRUE)
 ```
 
 ## Family level
 
 ```{r, results='asis'}
 taxrank <- "family"
-make_section(taxrank, "L", "LS")
-make_section(taxrank, "S", "LS")
+make_section(taxrank, "NC", "S")
+make_section(taxrank, "NC", "L")
+make_section(taxrank, "S", "LS", end_of_section = TRUE)
 ```
 
 ## Order level
 
 ```{r, results='asis'}
 taxrank <- "order"
-make_section(taxrank, "L", "LS")
-make_section(taxrank, "S", "LS")
+make_section(taxrank, "NC", "S")
+make_section(taxrank, "NC", "L")
+make_section(taxrank, "S", "LS", end_of_section = TRUE)
 ```
 
 ## Class level
 
 ```{r, results='asis'}
 taxrank <- "class"
-make_section(taxrank, "L", "LS")
-make_section(taxrank, "S", "LS")
+make_section(taxrank, "NC", "S")
+make_section(taxrank, "NC", "L")
+make_section(taxrank, "S", "LS", end_of_section = TRUE)
 ```
 
 ## References

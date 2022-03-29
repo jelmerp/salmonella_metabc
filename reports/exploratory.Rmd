@@ -26,7 +26,7 @@ knitr::opts_chunk$set(
   cache = FALSE,
   warning = FALSE,
   message = FALSE,
-  out.width = "100%"
+  out.width = "90%"
 )
 knitr::opts_knit$set(root.dir = here::here(),
                      output.dir = here::here("reports/html/"))
@@ -84,10 +84,17 @@ ps_prop <- transform(ps, "compositional")
 ```{r}
 ## Extract parts of the phyloseq object
 meta <- meta(ps)
-counts <- otu_table(ps_prop) %>% as.data.frame() %>% t()
+
 tax <- as.data.frame(tax_table(ps)) %>%
   rownames_to_column("ASV") %>%
   mutate(across(everything(), ~ str_trunc(.x, width = 25))) # Avoid very long taxon names
+
+counts_prop <- otu_table(ps_prop) %>% as.data.frame() %>% t()
+counts <- otu_table(ps) %>% as.data.frame() %>% t()
+
+dds <- mk_deseq(counts, meta)
+dds <- estimateSizeFactors(dds)
+counts_norm <- sweep(counts, 2, sizeFactors(dds), "/")
 ```
 
 ```{r}
@@ -205,38 +212,45 @@ ggplotly(p, tooltip = "text")
 
 ## Permanova  {.tabset .tabset-fade .tabset-pills}
 
-### Across 3 treatments
+```{r}
+get_perma <- function(ps, treatments) {
+  
+  fps <- prune_samples(sample_data(ps)[["treatment"]] %in% treatments, ps)
+  
+  perma_res <- adonis2(
+    UniFrac(fps, weighted = TRUE) ~ treatment,
+    data = as(sample_data(fps), "data.frame"),
+    permutations = 100000
+    )
 
-**Note: Treatment `NC` is excluded here since only one `NC` sample passed.**
+  perma_res %>% kable() %>% kable_styling(full_width = FALSE)
+}
+```
+
+### Across all treatments
 
 ```{r}
-ps_foc <- subset_samples(ps_prop, treatment != "NC")
-
-perma_res <- adonis2(UniFrac(ps_foc, weighted = TRUE) ~ treatment,
-                     data = as(sample_data(ps_foc), "data.frame"),
-                     permutations = 10000)
-
-perma_res %>%
-  kable() %>% 
-  kable_styling(full_width = FALSE)
+get_perma(ps_prop, treatments = trt_levels)
 ```
 
 <br>
 
 -----
 
-### `L` vs `L+S`
+### `NC` vs `S`
 
 ```{r}
-ps_foc <- subset_samples(ps_prop, treatment %in% c("L", "L+S"))
+get_perma(ps_prop, treatments = c("NC", "S"))
+```
 
-perma_res <- adonis2(UniFrac(ps_foc, weighted = TRUE) ~ treatment,
-                     data = as(sample_data(ps_foc), "data.frame"),
-                     permutations = 10000)
+<br>
 
-perma_res %>%
-  kable() %>% 
-  kable_styling(full_width = FALSE)
+-----
+
+### `NC` vs `L`
+
+```{r}
+get_perma(ps_prop, treatments = c("NC", "L"))
 ```
 
 <br>
@@ -246,16 +260,12 @@ perma_res %>%
 ### `S` vs `L+S`
 
 ```{r}
-ps_foc <- subset_samples(ps_prop, treatment %in% c("S", "L+S"))
-
-perma_res <- adonis2(UniFrac(ps_foc, weighted = TRUE) ~ treatment,
-                     data = as(sample_data(ps_foc), "data.frame"),
-                     permutations = 10000)
-
-perma_res %>%
-  kable() %>% 
-  kable_styling(full_width = FALSE)
+get_perma(ps_prop, treatments = c("S", "L+S"))
 ```
+
+<br>
+
+-----
 
 <br>
 
@@ -263,126 +273,231 @@ perma_res %>%
 
 ## Abundance by taxonomic level {.tabset .tabset-fade .tabset-pills}
 
+```{r}
+bar_group <- function(fps, taxrank, cols) {
+  means <- psmelt(fps) %>%
+    group_by(.data[[taxrank]], treatment) %>%
+    summarize(mean_abund = mean(Abundance))
+  
+  ggplot(means) +
+    aes(x = treatment, y = mean_abund, fill = .data[[taxrank]]) +
+    geom_col() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.01)),
+                       labels = scales::label_percent()) +
+    scale_fill_manual(values = cols) +
+    labs(y = "Mean abundance") +
+    theme(panel.grid.major.x = element_blank(),
+          panel.grid.minor = element_blank())
+}
+```
+
+```{r}
+bar_indiv <- function(fps, taxrank, cols) {
+  plot_bar(fps, fill = taxrank) +
+    facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.01)),
+                       labels = scales::label_percent()) +
+    scale_fill_manual(values = cols) +
+    labs(x = NULL) +
+    theme(axis.text.x = element_text(angle = 270),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor = element_blank())
+}
+```
+
 ### Phylum {.tabset .tabset-fade .tabset-pills}
 
-#### Most abundant phyla
-
-Only showing phyla with a mean proportional abundance higher than 0.1.
+#### By sample
 
 ```{r}
 ps_foc <- tax_glom(ps_prop, taxrank = "phylum", NArm = FALSE)
-ps_foc <- subset_taxa(ps_foc, taxa_sums(ps_foc) > 0.1)
-
-plot_bar(ps_foc, fill = "phylum") +
-  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
-  scale_y_continuous(expand = c(0, 0)) +
-  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
-  labs(x = NULL) +
-  theme_bw() +
-  theme(axis.text.x = element_text(angle = 270))
+cols <- distinctColorPalette(ntaxa(ps_foc))
 ```
 
-#### Without _Firmicutes_
+```{r}
+bar_indiv(ps_foc, "phylum", cols)
+```
+
+#### Grouped
+
+```{r}
+bar_group(ps_foc, "phylum", cols)
+```
+
+#### Without _Firmicutes_ -- by sample
 
 ```{r}
 ps_foc <- tax_glom(ps_prop, taxrank = "phylum", NArm = FALSE)
 ps_foc <- subset_taxa(ps_foc, phylum != "Firmicutes" | is.na(phylum))
+cols <- distinctColorPalette(ntaxa(ps_foc))
+```
 
-plot_bar(ps_foc, fill = "phylum") +
-  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.03))) +
-  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
-  labs(x = NULL) +
-  theme_bw() +
-  theme(axis.text.x = element_text(angle = 270))
+```{r}
+bar_indiv(ps_foc, "phylum", cols)
+```
+
+#### Without _Firmicutes_ -- grouped
+
+```{r}
+bar_group(ps_foc, taxrank = "phylum", cols)
 ```
 
 ### Class {.tabset .tabset-fade .tabset-pills}
 
-#### Most abundant classes
+#### By sample
 
 Only showing classes with a mean proportional abundance higher than 0.01.
 
 ```{r}
 ps_foc <- tax_glom(ps_prop, taxrank = "class", NArm = FALSE)
 ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
-
-plot_bar(ps_foc, fill = "class") +
-  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
-  scale_y_continuous(expand = c(0, 0)) +
-  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
-  labs(x = NULL) +
-  theme(axis.text.x = element_text(angle = 270),
-        legend.text = element_text(size = 9))
+cols <- distinctColorPalette(ntaxa(ps_foc))
 ```
 
-#### Without _Clostridia_
+```{r}
+bar_indiv(ps_foc, "class", cols)
+```
+
+#### Grouped
+
+```{r}
+bar_group(ps_foc, "class", cols)
+```
+
+#### Without _Clostridia_ -- by sample
 
 Showing all classes except _Clostridia_.
 
 ```{r}
 ps_foc <- tax_glom(ps_prop, taxrank = "class", NArm = FALSE)
 ps_foc <- subset_taxa(ps_foc, class != "Clostridia" | is.na(class))
-
-plot_bar(ps_foc, fill = "class") +
-  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.03))) +
-  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
-  labs(x = NULL) +
-  theme_bw() +
-  theme(axis.text.x = element_text(angle = 270),
-        legend.text = element_text(size = 9))
+cols <- distinctColorPalette(ntaxa(ps_foc))
 ```
 
-### Order
+```{r}
+bar_indiv(ps_foc, "class", cols)
+```
+
+#### Without _Clostridia_ -- grouped
+
+```{r}
+bar_group(ps_foc, "class", cols)
+```
+
+### Order {.tabset .tabset-fade .tabset-pills}
 
 Only showing orders with a mean proportional abundance higher than 0.01.
 
 ```{r}
 ps_foc <- tax_glom(ps_prop, taxrank = "order", NArm = FALSE)
 ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
-
-plot_bar(ps_foc, fill = "order") +
-  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
-  scale_y_continuous(expand = c(0, 0)) +
-  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
-  labs(x = NULL) +
-  theme(axis.text.x = element_text(angle = 270),
-        legend.text = element_text(size = 9))
+cols <- distinctColorPalette(ntaxa(ps_foc))
 ```
 
-### Family
+#### By sample
+
+```{r}
+bar_indiv(ps_foc, "order", cols)
+```
+
+#### Grouped
+
+```{r}
+bar_group(ps_foc, "order", cols)
+```
+
+### Family {.tabset .tabset-fade .tabset-pills}
 
 Only showing families with a mean proportional abundance higher than 0.01.
 
 ```{r}
 ps_foc <- tax_glom(ps_prop, taxrank = "family", NArm = FALSE)
 ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
-
-plot_bar(ps_foc, fill = "family") +
-  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
-  scale_y_continuous(expand = c(0, 0)) +
-  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
-  labs(x = NULL) +
-  theme(axis.text.x = element_text(angle = 270),
-        legend.text = element_text(size = 9))
+cols <- distinctColorPalette(ntaxa(ps_foc))
 ```
 
-### Genus
+#### By sample
+
+```{r}
+bar_indiv(ps_foc, "family", cols)
+```
+
+#### Grouped
+
+```{r}
+bar_group(ps_foc, "family", cols)
+```
+
+### Genus {.tabset .tabset-fade .tabset-pills}
 
 Only showing genera with a mean proportional abundance higher than 0.1.
 
 ```{r}
 ps_foc <- tax_glom(ps_prop, taxrank = "genus", NArm = FALSE)
 ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
+cols <- distinctColorPalette(ntaxa(ps_foc))
+```
 
-plot_bar(ps_foc, fill = "genus") +
-  facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
-  scale_y_continuous(expand = c(0, 0)) +
-  scale_fill_manual(values = randomcoloR::distinctColorPalette(ntaxa(ps_foc))) +
-  labs(x = NULL) +
-  theme(axis.text.x = element_text(angle = 270),
-        legend.text = element_text(size = 9))
+#### By sample
+
+```{r}
+bar_indiv(ps_foc, "genus", cols)
+```
+
+#### Grouped
+
+```{r}
+bar_group(ps_foc, "genus", cols)
+```
+
+<br>
+
+------
+
+## Focal taxa
+
+### Salmonella
+
+Not present in the dataset -- in fact, the phylum _Pseudomonadota_ is not found
+in the dataset at all.
+
+```{r}
+#tax <- as.data.frame(ps@tax_table)
+#any(tax$phylum == "Pseudomonadota")
+#unique(tax$phylum)
+```
+
+### Lactobacillus  {.tabset .tabset-fade .tabset-pills}
+
+The following taxa in the Order _Lactobacillales_ were detected:
+
+#### Table
+
+```{r}
+lacto_tax <- tax %>% filter(order == "Lactobacillales")
+```
+
+```{r}
+make_dt(lacto_tax, simple_mode = TRUE)
+```
+
+#### Heatmap
+
+```{r}
+mycols <- list(trt_cols)
+names(mycols) <- "treatment"
+  
+plot_heatmap(lacto_tax$ASV,
+             count_mat = counts_norm, meta_df = meta,
+             groups = c("treatment"), annot_colors = mycols)
+```
+
+#### Boxplots
+
+```{r, out.width = "80%"}
+walk(lacto_tax$ASV, plot_abund,
+    count_mat = counts_norm, tax_df = tax, meta = meta,
+    tax_df_column = "ASV")
 ```
 
 <br>
@@ -411,9 +526,13 @@ topASV_df <- merge(freqs_prop, tax_table(ps_prop),
 ```
 
 ```{r, out.width="80%", fig.height=7}
+mycols <- list(trt_cols)
+names(mycols) <- "treatment"
+  
 plot_heatmap(IDs = topASV_df$ASV[1:20],
-             meta_df = meta, count_mat = counts,
-             groups = "treatment")
+             meta_df = meta, count_mat = counts_norm,
+             groups = "treatment", annotation_colors = mycols,
+             log_transform = TRUE)
 ```
 
 ### Table with top-50

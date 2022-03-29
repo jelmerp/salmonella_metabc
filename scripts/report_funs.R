@@ -65,17 +65,14 @@ make_kable <- function(df) {
 ## Function to make a boxplot showing abundance of an ASV/genus/etc
 plot_abund <- function(
   ID,
-  x_var = "diet", col_var = "treatment", facet_var = NULL,
+  x_var = "treatment", col_var = "treatment", facet_var = NULL,
   ps = NULL, count_mat = NULL, meta = NULL, tax_df = NULL,
   model_res = NULL,
-  omit_id = FALSE, tax_level = "ASV",
+  omit_id = NULL, tax_level = "ASV",
   cols = NULL, title_size = 14,
   saveplot = FALSE, plotdir = here("reports/figs"), plot_id = NULL,
   ...) {
 
-  # ID <- ald$ID[1]; count_mat = counts; meta = fmeta; x_var = var1; col_var = NULL; facet_var = var2
-  # model_res = ald_plot; tax_df = NULL; title_size = 14
-  
   ## If a phyloseq object is provided, take the count data and metadata from there
   if (!is.null(ps)) {
     if (is.null(meta)) meta <- sample_data(ps)
@@ -88,7 +85,9 @@ plot_abund <- function(
   }
 
   ## Plot title
-  plot_title <- taxtitler(ID, tax_df, omit_id = omit_id, tax_level = tax_level)
+  if (is.null(omit_id)) if (tax_level == "ASV") omit_id <- FALSE else omit_id <- TRUE
+  plot_title <- taxtitler(ID, tax_df,
+                          omit_id = omit_id, tax_level = tax_level, ...)
 
   ## Create df with data to plot
   count_df <- data.frame(meta, count = count_mat[ID, ], ID = ID)
@@ -155,8 +154,9 @@ get_plot_dims <- function(heat_map) {
 plot_heatmap <- function(IDs,
                          dds = NULL, count_mat = NULL, meta_df = NULL,
                          groups = c("treatment"),
+                         log_transform = TRUE,
                          show_rownames = TRUE, show_colnames = FALSE,
-                         id_labsize = 10,
+                         id_labsize = 10, annotation_colors = NULL,
                          saveplot = FALSE, plotdir = here("reports/figs"),
                          plot_id = NULL, ...) {
 
@@ -170,12 +170,9 @@ plot_heatmap <- function(IDs,
     meta_df <- data.frame(meta_df)
   }
 
-  ## Select groups and IDs
+  ## Select groups
   fmeta <- meta_df[, groups, drop = FALSE]
-  fcount_mat <- count_mat[match(IDs, rownames(count_mat)),
-                          match(rownames(fmeta), colnames(count_mat))]
-  fcount_mat <- as.matrix(fcount_mat)
-
+  
   ## Arrange metadata according to the columns with included factors
   if (length(groups) == 1) fmeta <- fmeta %>% arrange(.data[[groups[1]]])
   if (length(groups) == 2) fmeta <- fmeta %>% arrange(.data[[groups[1]]],
@@ -183,7 +180,18 @@ plot_heatmap <- function(IDs,
   if (length(groups) == 3) fmeta <- fmeta %>% arrange(.data[[groups[1]]],
                                                       .data[[groups[2]]],
                                                       .data[[groups[3]]])
+  
+  ## Select IDs
+  fcount_mat <- count_mat[match(IDs, rownames(count_mat)),
+                          match(rownames(fmeta), colnames(count_mat))]
+  fcount_mat <- as.matrix(fcount_mat)
 
+  ## Take log10 of counts
+  if(log_transform == TRUE) {
+    fcount_mat <- log10(fcount_mat)
+    fcount_mat[fcount_mat == -Inf] <- 0
+  }
+  
   ## If few features are included, reduce the cell (row) height
   cellheight <- ifelse(length(IDs) > 20, NA, 20)
   id_labsize <- ifelse(length(IDs) > 40, 6, id_labsize)
@@ -203,11 +211,13 @@ plot_heatmap <- function(IDs,
   ## Function to create the plot
   pheat <- function(...) {
     pheatmap(
-      fcount_mat, annotation_col = fmeta,
+      fcount_mat,
+      annotation_col = fmeta, annotation_colors = annotation_colors,
       cluster_rows = cluster_rows, cluster_cols = FALSE,
       show_rownames = show_rownames, show_colnames = show_colnames,
       cellheight = cellheight,
-      fontsize = 9, fontsize_row = id_labsize, cex = 1
+      fontsize = 9, fontsize_row = id_labsize, cex = 1,
+      ...
     )
   }
   
@@ -266,15 +276,12 @@ get_sig <- function(fID, model_res, facet_var) {
 }
 
 ## Create plot title from taxon ID
-taxtitler <- function(ID, tax_df, tax_level = "ASV", omit_id = FALSE) {
+taxtitler <- function(ID, tax_df, tax_level = "ASV", omit_id = FALSE,
+                      tax_df_column = "ID") {
 
   if (!is.null(tax_df)) {
 
-    #if (tax_level == "ASV") tax_names <- tax_df[[tax_level]]
-    #if (tax_level != "ASV") tax_names <- janitor::make_clean_names(tax_df[[tax_level]])
-
-    #tax_row <- which(tax_names == ID)
-    tax_row <- which(tax_df$ID == ID)
+    tax_row <- which(tax_df[[tax_df_column]] == ID)
     
     if (tax_level %in% c("genus", "family", "order", "class")) tax_df$species <- NA
     if (tax_level %in% c("family", "order", "class")) tax_df$genus <- NA
@@ -284,11 +291,11 @@ taxtitler <- function(ID, tax_df, tax_level = "ASV", omit_id = FALSE) {
 
     taxon <- tax_df[tax_row, ] %>%
       mutate(taxon = case_when(
-        !is.na(species) ~ paste0("Species: ", genus, " ", species, " (phylum ", phylum, ")"),
-        !is.na(genus) ~ paste0("Genus: ", genus, " (phylum ", phylum, ")"),
-        !is.na(family) ~ paste0("Family: ", family, " (phylum ", phylum, ")"),
-        !is.na(order) ~ paste0("Order: ", order, " (phylum ", phylum, ")"),
-        !is.na(class) ~ paste0("Class: ", class, " (phylum ", phylum, ")"),
+        !is.na(species) ~ paste0("Species: ", genus, " ", species, "\n(phylum ", phylum, ")"),
+        !is.na(genus) ~ paste0("Genus: ", genus, "\n(phylum ", phylum, ")"),
+        !is.na(family) ~ paste0("Family: ", family, "\n(phylum ", phylum, ")"),
+        !is.na(order) ~ paste0("Order: ", order, "\n(phylum ", phylum, ")"),
+        !is.na(class) ~ paste0("Class: ", class, "\n(phylum ", phylum, ")"),
         !is.na(phylum) ~ paste0("Phylum: ", phylum),
         TRUE ~ "No phylum assigned"
       )) %>%
@@ -302,7 +309,8 @@ taxtitler <- function(ID, tax_df, tax_level = "ASV", omit_id = FALSE) {
     if (omit_id == TRUE) plot_title <- NULL
   }
 
-  plot_title <- str_wrap(plot_title, width = 35)
+  return(plot_title)
+  #plot_title <- str_wrap(plot_title, width = 35)
 }
 
 ## Plot DivNet diversity
@@ -433,21 +441,26 @@ mk_deseq <- function(counts, meta, design = "~1") {
   dds <- DESeqDataSetFromMatrix(counts, meta, design = design)
 }
 
-run_deseq <- function(dds, tax, fac, lev1, lev2) {
-  # counts=taxdat$counts; tax=taxdat$tax; fac="treatment_deseq"; lev1="LS"; lev2="L"
+run_deseq <- function(dds, tax, fac, lev1, lev2, thres = 0.1) {
   
+  dds <- subset(dds, select = !is.na(colData(dds)[[fac]]))
   design(dds) <- as.formula(paste("~", fac))
   deseq_res <- DESeq(dds)
   
-  results(deseq_res, contrast = c(fac, lev1, lev2)) %>%
-    as.data.frame() %>% 
+  res_raw <- results(deseq_res, contrast = c(fac, lev1, lev2)) %>%
+    as.data.frame()  %>%
+    filter(padj < thres)
+  
+  message("## Nr padj < ", thres, ": ", nrow(res_raw))
+  
+  res_raw %>% 
     merge(., tax, by.x = "row.names", by.y = "ID") %>%
     dplyr::rename(ID = Row.names, LFC = log2FoldChange) %>%
     dplyr::select(-stat, -pvalue, -lfcSE) %>%
     mutate(baseMean = round(baseMean, 2),
            LFC = round(LFC, 2),
            term = paste(lev1, "vs.", lev2)) %>%
+    dplyr::select(-baseMean, -LFC) %>% 
     arrange(padj) %>%
-    filter(padj < 0.1) %>%
     relocate(term)
 }
