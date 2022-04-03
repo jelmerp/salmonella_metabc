@@ -72,7 +72,7 @@ div_measures <- c("Observed", "Shannon", "Simpson")
 
 ```{r}
 ## General settings
-theme_set(theme_bw(base_size = 14))
+theme_set(theme_bw(base_size = 12))
 seed <- 100
 set.seed(seed)
 ```
@@ -131,6 +131,11 @@ if (remove_least_sample == TRUE) {
 ps_rar <- rarefy_even_depth(ps_for_rar,
                             sample.size = min(sample_sums(ps_for_rar)),
                             rngseed = seed, replace = FALSE)
+
+ps_noNC <- subset_samples(ps, treatment != "NC")
+sample_data(ps_noNC)$treatment <- factor(
+    sample_data(ps_noNC)$treatment, levels = trt_lev_noNC
+    )
 ```
 
 <br>
@@ -218,12 +223,194 @@ ggplot(divs) +
 
 ----
 
+## Alpha diversity with _breakaway_ and _DivNet_ {.tabset .tabset-fade .tabset-pills}
+
+Here, we compare species _richness_ (i.e. just the number of taxa)
+estimated with the R package _breakaway_
+([paper](https://onlinelibrary.wiley.com/doi/abs/10.1111/biom.12332),
+[package](https://github.com/adw96/breakaway))
+among treatments.
+
+These packages estimate alpha-diversity while trying to account for,
+among other things,
+differences in library size (total number of reads/ASVs) among samples,
+without the need for rarefaction.
+
+<br>
+
+**According to these tests:**
+
+- Richness is lower for the `NC` and `L` treatments
+  compared to `L+S`. `NC` also has lower richness than `S`.
+
+- Shannon diversity is higher for for the `S` treatment compared to `NC`.
+
+- Simpson diversity is lower for the `S` treatment compared to
+  `L+S` and to `N+C`.
+  
+
+<br>
+
+### Boxplot -- all
+
+```{r}
+rich_groups <- data.frame(treatment = trt_lev_all,
+                          group = c("a", "ab", "bc", "c"))
+sh_groups <- data.frame(treatment = trt_lev_all,
+                        group = c("a", "ab", "b", "ab"))
+si_groups<- data.frame(treatment = trt_lev_all,
+                       group = c("a", "ab", "b", "a"))
+```
+
+```{r}
+p_rich <- plot_div(ps_for_models, covar = "treatment",
+                   ytitle = "Richness", y_as_title = TRUE,
+                   covar_cols = trt_col_all, group_df = rich_groups) +
+  guides(color = "none")
+p_sh <- plot_div(ps_for_models, divnet_res, div_index = "shannon",
+                 ytitle = "Shannon", y_as_title = TRUE,
+                 covar = "treatment", covar_cols = trt_col_all,
+                 group_df = sh_groups) +
+  guides(color = "none")
+p_si <- plot_div(ps_for_models, divnet_res, div_index = "simpson",
+                 ytitle = "Simpson", y_as_title = TRUE,
+                 covar = "treatment", covar_cols = trt_col_all,
+                 group_df = si_groups) +
+  guides(color = "none")
+p_rich + p_sh + p_si
+```
+
+<br>
+
+----
+
+### Boxplot -- no NC
+
+```{r}
+rich_groups <- data.frame(treatment = trt_lev_noNC,
+                          group = c("a", "ab", "b"))
+sh_groups <- data.frame(treatment = trt_lev_noNC,
+                        group = c("a", "a", "a"))
+si_groups<- data.frame(treatment = trt_lev_noNC,
+                       group = c("ab", "a", "b"))
+```
+
+```{r}
+p_rich <- plot_div(ps_noNC, covar = "treatment",
+                   ytitle = "Richness", y_as_title = TRUE,
+                   covar_cols = trt_col_all, group_df = rich_groups) +
+  guides(color = "none")
+p_sh <- plot_div(ps_noNC, divnet_res, div_index = "shannon",
+                 ytitle = "Shannon", y_as_title = TRUE,
+                 covar = "treatment", covar_cols = trt_col_all,
+                 group_df = sh_groups) +
+  guides(color = "none")
+p_si <- plot_div(ps_noNC, divnet_res, div_index = "simpson",
+                 ytitle = "Simpson", y_as_title = TRUE,
+                 covar = "treatment", covar_cols = trt_col_all,
+                 group_df = si_groups) +
+  guides(color = "none")
+p_rich + p_sh + p_si
+```
+
+```{r}
+### Plot with per-sample error bars
+#Note that diversity estimation with these packages is done on a _per-sample_ basis,
+#so we can have error bars for each sample:
+
+# p_rich <- plot_div(ps_for_models, each_sample = TRUE) +
+#   scale_color_manual(values = trt_col_all) +
+#   guides(color = "none") +
+#   theme(axis.text.x = element_text(size = 10))
+# p_sh <- plot_div(ps_for_models, divnet_res,
+#                  div_index = "shannon", covar = "treatment",
+#                  each_sample = TRUE) +
+#   scale_color_manual(values = trt_col_all) +
+#   guides(color = "none") +
+#   theme(axis.text.x = element_text(size = 10))
+# p_si <- plot_div(ps_for_models, divnet_res,
+#                  div_index = "simpson", covar = "treatment",
+#                  each_sample = TRUE) +
+#   scale_color_manual(values = trt_col_all) +
+#   guides(color = "none") +
+#   theme(axis.text.x = element_text(size = 10))
+# p_rich + p_sh + p_si
+```
+
+<br>
+
+----
+
+### Model -- L+S vs others
+
+```{r}
+## Richness
+rich_res <- get_break(ps_for_models) %>% 
+  mutate(treatment = relevel(factor(treatment), ref = c("L+S")))
+rich_mod <- betta(formula = estimate ~ treatment, ses = error, data = rich_res)
+
+## Shannon
+shan <- data.frame(estimate = summary(divnet_res$shannon)$estimate,
+                   error = sqrt(divnet_res$`shannon-variance`)) %>%
+  merge(meta(ps_for_models), ., by = "row.names") %>%
+  mutate(treatment = relevel(factor(treatment), ref = c("L+S")))
+shan_mod <- betta(formula = estimate ~ treatment, ses = error, data = shan)
+
+## Simpson
+simp <- data.frame(estimate = summary(divnet_res$simpson)$estimate,
+                   error = sqrt(divnet_res$`simpson-variance`)) %>%
+  merge(meta(ps_for_models), ., by = "row.names") %>%
+  mutate(treatment = relevel(factor(treatment), ref = c("L+S")))
+simp_mod <- betta(formula = estimate ~ treatment, ses = error, data = simp)
+
+## Print formatted table
+modtab(betta_res = list(rich_mod, shan_mod, simp_mod),
+       model_names = c("richness", "Shannon", "Simpson"),
+       fmt = 3)
+```
+
+<br>
+
+----
+
+### Model -- NC vs others
+
+```{r}
+## Richness
+rich_res <- get_break(ps_for_models) %>% 
+  mutate(treatment = relevel(factor(treatment), ref = c("NC")))
+rich_mod <- betta(formula = estimate ~ treatment, ses = error, data = rich_res)
+
+## Shannon
+shan <- data.frame(estimate = summary(divnet_res$shannon)$estimate,
+                   error = sqrt(divnet_res$`shannon-variance`)) %>%
+  merge(meta(ps_for_models), ., by = "row.names") %>%
+  mutate(treatment = relevel(factor(treatment), ref = c("NC")))
+shan_mod <- betta(formula = estimate ~ treatment, ses = error, data = shan)
+
+## Simpson
+simp <- data.frame(estimate = summary(divnet_res$simpson)$estimate,
+                   error = sqrt(divnet_res$`simpson-variance`)) %>%
+  merge(meta(ps_for_models), ., by = "row.names") %>%
+  mutate(treatment = relevel(factor(treatment), ref = c("NC")))
+simp_mod <- betta(formula = estimate ~ treatment, ses = error, data = simp)
+
+## Print formatted table
+modtab(betta_res = list(rich_mod, shan_mod, simp_mod),
+       model_names = c("richness", "Shannon", "Simpson"),
+       fmt = 3)
+```
+
+<br>
+
+----
+
 ## Alpha diversity with _phyloseq_
 
-"Observed" diversity = richness = the number of distinct ASVs,
-not taking evenness into account.
-
-**No significant differences between treatments were found.**
+Phyloseq provides more basic estimates of alpha-diversity that do not correct
+for differences in library size (total number of reads/ASVs) among samples.
+Therefore, the fairest/conservative comparisons should be made with rarefied
+data, but I also show the results without rarefication.
 
 ### Rarefied data {.tabset .tabset-fade .tabset-pills}
 
@@ -244,10 +431,13 @@ plot_richness(ps_rar,
               measures = div_measures) +
   geom_point(size = 2.5) +
   scale_color_manual(values = trt_col_all) +
-  guides(color = "none")
+  guides(color = "none") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank())
 ```
 
-#### Model: richness (observed) 
+#### Model: richness
 
 ```{r}
 kruskal.test(Observed ~ treatment, data = rich_df)
@@ -267,6 +457,8 @@ kruskal.test(Simpson ~ treatment, data = rich_df)
 
 ### Raw data {.tabset .tabset-fade .tabset-pills}
 
+**No significant differences between treatments were found.**
+
 ```{r}
 rich_df <- estimate_richness(ps, measures = div_measures) %>%
   merge(., meta, by.x = "row.names", by.y = "sampleID2")
@@ -280,20 +472,33 @@ plot_richness(ps,
               measures = div_measures) +
   geom_point(size = 2.5) +
   scale_color_manual(values = trt_col_all) +
-  guides(color = "none")
+  guides(color = "none") +
+  theme(axis.text.x = element_text(angle = 0))
 ```
 
-#### Model: richness (observed) 
+<br>
+
+-----
+
+#### Model: richness
 
 ```{r}
 kruskal.test(Observed ~ treatment, data = rich_df)
 ```
+
+<br>
+
+-----
 
 #### Model: Shannon
 
 ```{r}
 kruskal.test(Shannon ~ treatment, data = rich_df)
 ```
+
+<br>
+
+-----
 
 #### Model: Simpson
 
@@ -304,147 +509,5 @@ kruskal.test(Simpson ~ treatment, data = rich_df)
 <br>
 
 -----
-
-## Richness with _breakaway_ {.tabset .tabset-fade .tabset-pills}
-
-Here, we compare species _richness_ (i.e. just the number of taxa)
-estimated with the R package _breakaway_
-([paper](https://onlinelibrary.wiley.com/doi/abs/10.1111/biom.12332),
-[package](https://github.com/adw96/breakaway))
-among treatments.
-
-**According to this test, richness is significantly lower for the NC and L treatments**
-**compared to L+S.**
-**NC also has lower richness than S.**
-
-### Boxplot
-
-```{r}
-plot_div(ps_for_models, covar = "treatment") +
-  scale_color_manual(values = trt_col_all)
-```
-
-### Plot with per-sample error bars
-
-Note that richness estimation is done on a _per-sample_ basis,
-so we can have error bars for each sample:
-
-```{r}
-plot_div(ps_for_models, each_sample = TRUE) +
-  scale_color_manual(values = trt_col_all)
-```
-
-### Model -- L+S vs others
-
-```{r}
-## All 3 treatment levels
-rich_res <- get_break(ps_for_models) %>% 
-  mutate(treatment = relevel(factor(treatment), ref = c("L+S")))
-
-bt_treat <- betta(formula = estimate ~ treatment, ses = error, data = rich_res)
-
-modtab(bt_treat, model_names = "All treatments")
-```
-
-### Model -- NC vs others
-
-```{r}
-rich_res <- get_break(ps_for_models) %>% 
-  mutate(treatment = relevel(factor(treatment), ref = c("NC")))
-
-bt_treat <- betta(formula = estimate ~ treatment, ses = error, data = rich_res)
-
-modtab(bt_treat, model_names = "All treatments")
-```
-
-<br>
-
------
-
-## Alpha diversity with _DivNet_ {.tabset .tabset-fade .tabset-pills}
-
-**According to this test, Simpson diversity is significantly lower for the**
-**S treatment compared to L+S and to N+C, among others.**
-
-### Boxplot
-
-```{r}
-p_sh <- plot_div(ps_for_models, divnet_res, div_index = "shannon", covar = "treatment") +
-  scale_color_manual(values = trt_col_all) +
-  guides(color = "none")
-p_si <- plot_div(ps_for_models, divnet_res, div_index = "simpson", covar = "treatment") +
-  scale_color_manual(values = trt_col_all) +
-  guides(color = "none")
-p_sh + p_si
-```
-
-### Plot with per-sample error bars
-
-Note that richness estimation is done on a _per-sample_ basis,
-so we can have error bars for each sample:
-
-```{r}
-p_sh <- plot_div(ps_for_models, divnet_res,
-                 div_index = "shannon", covar = "treatment",
-                 each_sample = TRUE) +
-  scale_color_manual(values = trt_col_all) +
-  guides(color = "none")
-p_si <- plot_div(ps_for_models, divnet_res,
-                 div_index = "simpson", covar = "treatment",
-                 each_sample = TRUE) +
-  scale_color_manual(values = trt_col_all) +
-  guides(color = "none")
-p_sh + p_si
-```
-
-### Model -- L+S vs others
-
-```{r}
-## Shannon
-shan <- data.frame(estimate = summary(divnet_res$shannon)$estimate,
-                   error = sqrt(divnet_res$`shannon-variance`)) %>%
-  merge(meta(ps_for_models), ., by = "row.names") %>%
-  mutate(treatment = relevel(factor(treatment), ref = c("L+S")))
-shan_mod <- betta(formula = estimate ~ treatment, ses = error, data = shan)
-
-## Simpson
-simp <- data.frame(estimate = summary(divnet_res$simpson)$estimate,
-                   error = sqrt(divnet_res$`simpson-variance`)) %>%
-  merge(meta(ps_for_models), ., by = "row.names") %>%
-  mutate(treatment = relevel(factor(treatment), ref = c("L+S")))
-simp_mod <- betta(formula = estimate ~ treatment, ses = error, data = simp)
-
-## Print formatted table
-modtab(betta_res = list(shan_mod, simp_mod),
-       model_names = c("Shannon", "Simpson"),
-       fmt = 3)
-```
-
-### Model -- NC vs others
-
-```{r}
-## Shannon
-shan <- data.frame(estimate = summary(divnet_res$shannon)$estimate,
-                   error = sqrt(divnet_res$`shannon-variance`)) %>%
-  merge(meta(ps_for_models), ., by = "row.names") %>%
-  mutate(treatment = relevel(factor(treatment), ref = c("NC")))
-shan_mod <- betta(formula = estimate ~ treatment, ses = error, data = shan)
-
-## Simpson
-simp <- data.frame(estimate = summary(divnet_res$simpson)$estimate,
-                   error = sqrt(divnet_res$`simpson-variance`)) %>%
-  merge(meta(ps_for_models), ., by = "row.names") %>%
-  mutate(treatment = relevel(factor(treatment), ref = c("NC")))
-simp_mod <- betta(formula = estimate ~ treatment, ses = error, data = simp)
-
-## Print formatted table
-modtab(betta_res = list(shan_mod, simp_mod),
-       model_names = c("Shannon", "Simpson"),
-       fmt = 3)
-```
-
-<br>
-
-----
 
 ## References
