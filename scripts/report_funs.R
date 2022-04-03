@@ -314,7 +314,7 @@ taxtitler <- function(ID, tax_df, tax_level = "ASV", omit_id = FALSE,
 }
 
 ## Plot DivNet diversity
-plot_div <- function(ps, divnet_obj = NULL,
+plot_div <- function(ps, divnet_obj = NULL, ytitle = NULL,
                      div_index = "shannon", covar = "treatment",
                      each_sample = FALSE, ...) {
 
@@ -322,30 +322,64 @@ plot_div <- function(ps, divnet_obj = NULL,
     df <- get_divnet(divnet_obj,
                      meta = as_tibble(sample_data(ps)),
                      div_index = div_index)
-    ytitle <- paste(div_index, "diversity estimate")
+    if (is.null(ytitle)) ytitle <- paste(div_index, "diversity estimate")
   
   } else {
     df <- get_break(ps)
-    ytitle <- "richness estimate"
+    if (is.null(ytitle)) ytitle <- "richness estimate"
   }
   
   if(each_sample == TRUE)
-    p <- plot_div_sample(df, covar, ytitle)
+    p <- plot_div_sample(df, covar, ytitle, ...)
   else
-    p <- plot_div_box(df, covar, ytitle)
+    p <- plot_div_box(df, covar, ytitle, ...)
   
   return(p)
 }
 
-plot_div_box <- function(df, covar, ytitle) {
-  ggplot(df) +
-    aes(x = .data[[covar]], color = .data[[covar]], y = estimate) +
+plot_div_box <- function(df, covar, ytitle, y_as_title = FALSE,
+                         covar_cols = NULL,
+                         group_df = NULL) {
+  
+  if (!is.null(group_df)) {
+    group_df <- df %>%
+      group_by(.data[[covar]]) %>%
+      summarize(max = max(estimate)) %>%
+      left_join(group_df, by = "treatment")
+  }
+
+  p <- ggplot(df) +
+    aes(x = .data[[covar]],
+        color = .data[[covar]],
+        y = estimate) +
     geom_boxplot(outlier.shape = NA) +
-    geom_jitter(width = 0.1, size = 3) +
+    geom_jitter(width = 0.1, size = 1) +
     scale_y_continuous(labels = scales::comma) +
     labs(x = NULL, y = ytitle, color = covar) +
     theme(panel.grid.minor = element_blank(),
           panel.grid.major.x = element_blank())
+  
+  if (!is.null(covar_cols)) p <- p + scale_color_manual(values = covar_cols)
+  
+  if (!is.null(group_df)) {
+    p <- p +
+      #ggnewscale::new_scale_color() +
+      geom_text(data = group_df, size = 3, fontface = "bold",
+                aes(x = .data[[covar]],
+                    y = max * 1.1,
+                    color = "grey30",
+                    label = group)) #+
+      #scale_color_brewer(palette = "Pastel1")
+  }
+  
+  if (y_as_title == TRUE) {
+    p <- p +
+      theme(axis.title.y = element_blank(),
+            plot.title = element_text(hjust = 0.5, size = 13)) +
+      labs(title = ytitle)
+  }
+  
+  return(p)
 }
 
 plot_div_sample <- function(df, covar, ytitle) {
@@ -463,4 +497,144 @@ run_deseq <- function(dds, tax, fac, lev1, lev2, thres = 0.1) {
     dplyr::select(-baseMean, -LFC) %>% 
     arrange(padj) %>%
     relocate(term)
+}
+
+## Barplot showing taxon abundances
+pbar <- function(ps, taxrank,
+                 xvar = "Sample", facetvar = "treatment",
+                 abund_tres = 0.01,
+                 na_to_unknown = TRUE,
+                 sort_by_abund = TRUE,
+                 cols = NULL) {
+  
+  ## Agglomerate by a taxrank
+  ps <- tax_glom(ps, taxrank = taxrank, NArm = FALSE)
+  
+  ## Turn the phyloseq object into a dataframe
+  df <- psmelt(ps)
+  
+  ## Merge different NA taxa
+  if (any(is.na(df[[taxrank]]))) {
+    NAs <- df %>%
+      filter(is.na(.data[[taxrank]])) %>%
+      group_by(Sample) %>%
+      summarize(Abundance = sum(Abundance)) %>%
+      left_join(sample_data(ps), by = c("Sample" = "sampleID"))
+    NAs[[taxrank]] <- NA
+    df <- df %>%
+      filter(!is.na(.data[[taxrank]])) %>%
+      bind_rows(NAs)
+  }
+  
+  ## If not plotting by sample, compute mean by a grouping variable
+  if (xvar != "Sample") {
+    df <- df %>%
+      group_by(.data[[taxrank]], .data[[xvar]]) %>%
+      summarize(Abundance = mean(Abundance))
+  }
+  
+  ## Change low-abundance taxa to "other"
+  if (!is.na(abund_tres)) {
+    
+    ## Get vector of taxa to be lumped
+    to_lump <- df %>%
+      group_by(.data[[taxrank]]) %>%
+      summarize(mean_abund = mean(Abundance)) %>%
+      filter(mean_abund <= abund_tres) %>%
+      pull(.data[[taxrank]])
+    message(length(to_lump), " taxa will be lumped into a new category 'other'")
+    
+    ## Create a df for the lumped taxa, with summed abundance
+    other <- df %>%
+      filter(.data[[taxrank]] %in% to_lump) %>%
+      group_by(.data[[xvar]]) %>%
+      summarize(Abundance = sum(Abundance))
+    
+    if (xvar == "Sample") {
+      other <- other %>% left_join(sample_data(ps), by = c("Sample" = "sampleID"))
+    }
+    
+    other[[taxrank]] <- "other (rare)"
+    
+    ## Filter out original low-abund taxa and add lumped one
+    df <- df %>%
+      filter(! .data[[taxrank]] %in% to_lump) %>%
+      bind_rows(other)
+    
+    ## Sort ASVs by mean overall abundance
+    if (sort_by_abund == TRUE) {
+      tax_ord <- df %>%
+        group_by(.data[[taxrank]]) %>%
+        summarize(abund = mean(Abundance)) %>%
+        arrange(-abund) %>%
+        drop_na() %>%
+        pull(.data[[taxrank]])
+      df[[taxrank]] <- factor(df[[taxrank]], levels = tax_ord)
+    }
+    
+    ## Make sure the 'other' category is the last factor level
+    df[[taxrank]] <- fct_relevel(df[[taxrank]], "other (rare)", after = Inf)
+  
+  } else if (sort_by_abund == TRUE) {
+    ## Sort ASVs by mean overall abundance
+    tax_ord <- df %>%
+      group_by(.data[[taxrank]]) %>%
+      summarize(abund = mean(Abundance)) %>%
+      arrange(-abund) %>%
+      drop_na() %>%
+      pull(.data[[taxrank]])
+    df[[taxrank]] <- factor(df[[taxrank]], levels = tax_ord)
+  }
+  
+  ## Change NA taxa to "unknown"
+  if (na_to_unknown == TRUE) {
+    levels(df[[taxrank]]) <- c(levels(df[[taxrank]]), "unknown")
+    df[[taxrank]][is.na(df[[taxrank]])] <- "unknown"
+    df[[taxrank]] <- fct_relevel(df[[taxrank]], "unknown", after = Inf)
+  }
+  
+  ## Set colors
+  ntax <- length(unique(na.omit(df[[taxrank]])))
+  if (is.null(cols)) {
+    cols <- distinctColorPalette(ntax)
+  } else {
+    cols <- cols[1:ntax]
+  }
+  
+  ## Set last color ('other' category) to grey:
+  if (any(df[[taxrank]] == "other (rare)")) {
+    if (any(df[[taxrank]] == "unknown")) {
+      cols[length(cols) - 1] <- "grey80"
+      cols[length(cols)] <- "grey60"
+    } else {
+      cols[length(cols)] <- "grey80"
+    }
+  } else if (any(df[[taxrank]] == "unknown")) {
+    cols[length(cols)] <- "grey60"
+  }
+    
+  ## Create the plot
+  p <- ggplot(df) +
+    aes(x = .data[[xvar]],
+        y = Abundance,
+        fill = .data[[taxrank]]) +
+    geom_col(color = "grey20",
+             position = position_stack(reverse = TRUE)) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.005)),
+                       labels = scales::label_percent()) +
+    scale_fill_manual(values = cols,
+                      guide = guide_legend(reverse = TRUE)) +
+    labs(x = NULL) +
+    theme(panel.grid.major.x = element_blank(),
+          panel.grid.minor = element_blank())
+  
+  ## If plotting by sample, facet by a grouping variable
+  if (xvar == "Sample") {
+    p <- p +
+      facet_grid(cols = vars(.data[[facetvar]]),
+                 scales = "free_x", space = "free") +
+      theme(axis.text.x = element_text(angle = 270))
+  }
+  
+  print(p)
 }
