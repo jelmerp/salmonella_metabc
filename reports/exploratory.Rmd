@@ -26,7 +26,8 @@ knitr::opts_chunk$set(
   cache = FALSE,
   warning = FALSE,
   message = FALSE,
-  out.width = "90%"
+  out.width = "80%",
+  dpi=150
 )
 knitr::opts_knit$set(root.dir = here::here(),
                      output.dir = here::here("reports/html/"))
@@ -60,12 +61,27 @@ ps_file <- file.path(indir, "ps_dadatax_filt.rds")
 trt_levels <- c("NC", "L", "S", "L+S")
 trt_cols <- brewer.pal(length(trt_levels), "Set1")
 names(trt_cols) <- trt_levels
+
+trt_lev_noNC <- c("L", "S", "L+S")
+trt_col_noNC <- brewer.pal(4, "Set1")[2:4]
+names(trt_col_noNC) <- trt_lev_noNC
 ```
 
 ```{r}
 ## General settings
 set.seed(100)
-theme_set(theme_bw(base_size = 13))
+theme_set(theme_bw(base_size = 12))
+
+# library(Polychrome)
+# P36 = createPalette(20,  c("#ff0000", "#00ff00", "#0000ff"))
+# swatch(P36)
+# 
+# all_cols <- grDevices::colors()[grep('gr(a|e)y', grDevices::colors(), invert = T)]
+# all_cols[1:20]
+
+mycols <- c("#a74bb4", "#62b54f", "#7064d3", "#b5b348", "#dd6fc5",
+            "#4db18a", "#ce416e", "#45aecf", "#d55035", "#7784cb",
+            "#cc8e3e", "#ac6090", "#647934", "#df837e", "#9c5736")
 ```
 
 ```{r}
@@ -79,6 +95,12 @@ sample_data(ps)$treatment <- factor(sample_data(ps)$treatment, levels = trt_leve
 ```{r}
 ## Phyloseq object for ordination visualization
 ps_prop <- transform(ps, "compositional")
+
+## Without NC
+ps_prop_noNC <- subset_samples(ps_prop, treatment != "NC")
+sample_data(ps_prop_noNC)$treatment <- factor(
+    sample_data(ps_prop_noNC)$treatment, levels = trt_lev_noNC
+    )
 ```
 
 ```{r}
@@ -131,19 +153,17 @@ This was done with the `adonis2()` function from the R package `vegan`
 
 ------
 
-## Ordination (PCoA)
+## Ordination (PCoA) {.tabset .tabset-fade .tabset-pills}
 
 ```{r}
 ord <- ordinate(ps_prop, method = "PCoA",
                distance = phyloseq::distance(ps_prop, method = "wunifrac"))
 ```
 
-### Interactive plots {.tabset .tabset-fade .tabset-pills}
+### Interactive -- axis 1 & 2 
 
-These plots are interactive so you can (1) hover over points and see more info,
+This plot is interactive so you can (1) hover over points and see more info,
 and (2) remove certain categories of point by clicking on the legend.
-
-#### Axis 1 & 2
 
 ```{r}
 p <- plot_ordination(ps_prop, ord, color = "treatment") +
@@ -154,7 +174,10 @@ p <- plot_ordination(ps_prop, ord, color = "treatment") +
 ggplotly(p, tooltip = "text")
 ```
 
-#### Axis 3 & 4
+### Interactive -- Axis 3 & 4
+
+This plot is interactive so you can (1) hover over points and see more info,
+and (2) remove certain categories of point by clicking on the legend.
 
 ```{r}
 p <- plot_ordination(ps_prop, ord, color = "treatment", axes = c(3, 4)) +
@@ -165,9 +188,7 @@ p <- plot_ordination(ps_prop, ord, color = "treatment", axes = c(3, 4)) +
 ggplotly(p, tooltip = "text")
 ```
 
-### Static plots {.tabset .tabset-fade .tabset-pills}
-
-#### Axis 1 & 2
+### Static -- axis 1 & 2
 
 ```{r}
 plot_ordination(ps_prop, ord, color = "treatment") +
@@ -176,7 +197,7 @@ plot_ordination(ps_prop, ord, color = "treatment") +
   theme(panel.grid.minor = element_blank())
 ```
 
-#### Axis 3 & 4
+### Static -- axis 3 & 4
 
 ```{r}
 plot_ordination(ps_prop, ord, color = "treatment", axes = c(3, 4)) +
@@ -185,12 +206,12 @@ plot_ordination(ps_prop, ord, color = "treatment", axes = c(3, 4)) +
   theme(panel.grid.minor = element_blank())
 ```
 
-### Plotting ASVs instead of taxa
+### ASVs
 
 ```{r}
 colorby_columns <- which(colnames(tax_table(ps)) == "phylum")
 ncols <- length(unique(tax_table(ps)[, colorby_columns]))
-mycols <- distinctColorPalette(ncols)
+pca_cols <- distinctColorPalette(ncols)
 
 pdf <- plot_ordination(ps_prop, ord, type = "taxa", justDF = TRUE) %>%
   rownames_to_column("ASV") %>%
@@ -201,7 +222,7 @@ p <- ggplot(pdf) +
   geom_point(aes(text = paste("ASV:", ASV, "\n",
                               "Phylum:", phylum, "\n",
                               "Class:", class, "\n"))) +
-  scale_color_manual(values = mycols) +
+  scale_color_manual(values = pca_cols) +
   labs(size = "Abundance")
 ggplotly(p, tooltip = "text")
 ```
@@ -267,192 +288,225 @@ get_perma(ps_prop, treatments = c("S", "L+S"))
 
 -----
 
-<br>
-
------
-
 ## Abundance by taxonomic level {.tabset .tabset-fade .tabset-pills}
 
-```{r}
-bar_group <- function(fps, taxrank, cols) {
-  means <- psmelt(fps) %>%
-    group_by(.data[[taxrank]], treatment) %>%
-    summarize(mean_abund = mean(Abundance))
+- `unknown`s represent ASVs that had no taxonomic assignment at the focal taxonomic
+  level.
   
-  ggplot(means) +
-    aes(x = treatment, y = mean_abund, fill = .data[[taxrank]]) +
-    geom_col() +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.01)),
-                       labels = scales::label_percent()) +
-    scale_fill_manual(values = cols) +
-    labs(y = "Mean abundance") +
-    theme(panel.grid.major.x = element_blank(),
-          panel.grid.minor = element_blank())
-}
-```
+- Taxa are sorted by overall abundance.
 
-```{r}
-bar_indiv <- function(fps, taxrank, cols) {
-  plot_bar(fps, fill = taxrank) +
-    facet_grid(cols = vars(treatment), scales = "free_x", space = "free") +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.01)),
-                       labels = scales::label_percent()) +
-    scale_fill_manual(values = cols) +
-    labs(x = NULL) +
-    theme(axis.text.x = element_text(angle = 270),
-          panel.grid.major.x = element_blank(),
-          panel.grid.minor = element_blank())
-}
-```
+<br>
 
 ### Phylum {.tabset .tabset-fade .tabset-pills}
+
+Showing all phyla individually.
 
 #### By sample
 
 ```{r}
-ps_foc <- tax_glom(ps_prop, taxrank = "phylum", NArm = FALSE)
-cols <- distinctColorPalette(ntaxa(ps_foc))
+pbar(ps_prop, "phylum", abund_tres = NA, cols = mycols)
 ```
 
-```{r}
-bar_indiv(ps_foc, "phylum", cols)
-```
+<br>
+
+----
 
 #### Grouped
 
-```{r}
-bar_group(ps_foc, "phylum", cols)
+```{r, fig.asp = 1.2, fig.width = 4, out.width="50%"}
+pbar(ps_prop, "phylum", abund_tres = NA, xvar = "treatment", cols = mycols)
 ```
 
+<br>
+
+----
+
+#### Grouped -- no NC
+
+```{r, fig.asp = 1.25, fig.width = 3.8, out.width="48%"}
+pbar(ps_prop_noNC, "phylum", abund_tres = NA, xvar = "treatment", cols = mycols)
+```
+
+<br>
+
+----
+
+```{r}
 #### Without _Firmicutes_ -- by sample
-
-```{r}
-ps_foc <- tax_glom(ps_prop, taxrank = "phylum", NArm = FALSE)
-ps_foc <- subset_taxa(ps_foc, phylum != "Firmicutes" | is.na(phylum))
-cols <- distinctColorPalette(ntaxa(ps_foc))
-```
-
-```{r}
-bar_indiv(ps_foc, "phylum", cols)
-```
+#ps_foc <- tax_glom(ps_prop, taxrank = "phylum", NArm = FALSE)
+#ps_foc <- subset_taxa(ps_foc, phylum != "Firmicutes" | is.na(phylum))
+#cols <- distinctColorPalette(ntaxa(ps_foc))
+#bar_indiv(ps_foc, "phylum", cols)
 
 #### Without _Firmicutes_ -- grouped
-
-```{r}
-bar_group(ps_foc, taxrank = "phylum", cols)
+#bar_group(ps_foc, taxrank = "phylum", cols)
 ```
 
 ### Class {.tabset .tabset-fade .tabset-pills}
 
+Showing all classes individually.
+
 #### By sample
 
-Only showing classes with a mean proportional abundance higher than 0.01.
-
 ```{r}
-ps_foc <- tax_glom(ps_prop, taxrank = "class", NArm = FALSE)
-ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
-cols <- distinctColorPalette(ntaxa(ps_foc))
+pbar(ps_prop, "class", abund_tres = NA, cols = mycols)
 ```
 
-```{r}
-bar_indiv(ps_foc, "class", cols)
-```
+<br>
+
+----
 
 #### Grouped
 
-```{r}
-bar_group(ps_foc, "class", cols)
+```{r, fig.asp = 1.2, fig.width = 4, out.width="50%"}
+pbar(ps_prop, "class", abund_tres = NA, xvar = "treatment", cols = mycols)
 ```
 
-#### Without _Clostridia_ -- by sample
+<br>
+
+----
+
+#### Grouped -- no NC
+
+```{r, fig.asp = 1.25, fig.width = 3.8, out.width="48%"}
+pbar(ps_prop_noNC, "class", abund_tres = NA, xvar = "treatment", cols = mycols)
+```
+
+<br>
+
+----
+
+#### No _Clostridia_ -- by sample
 
 Showing all classes except _Clostridia_.
 
 ```{r}
-ps_foc <- tax_glom(ps_prop, taxrank = "class", NArm = FALSE)
-ps_foc <- subset_taxa(ps_foc, class != "Clostridia" | is.na(class))
-cols <- distinctColorPalette(ntaxa(ps_foc))
+ps_foc <- subset_taxa(ps_prop, class != "Clostridia" | is.na(class))
 ```
 
 ```{r}
-bar_indiv(ps_foc, "class", cols)
+pbar(ps_foc, "class", abund_tres = NA, cols = mycols)
 ```
 
-#### Without _Clostridia_ -- grouped
+<br>
 
-```{r}
-bar_group(ps_foc, "class", cols)
+----
+
+#### No _Clostridia_ -- grouped
+
+```{r, fig.asp = 1.2, fig.width = 4, out.width="50%"}
+pbar(ps_foc, "class", abund_tres = NA, xvar = "treatment", cols = mycols)
 ```
+
+<br>
+
+----
 
 ### Order {.tabset .tabset-fade .tabset-pills}
 
-Only showing orders with a mean proportional abundance higher than 0.01.
-
-```{r}
-ps_foc <- tax_glom(ps_prop, taxrank = "order", NArm = FALSE)
-ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
-cols <- distinctColorPalette(ntaxa(ps_foc))
-```
+Orders with a mean proportional abundance below 1% have been lumped into
+the category `other (rare)`.
 
 #### By sample
 
 ```{r}
-bar_indiv(ps_foc, "order", cols)
+pbar(ps_prop, "order", abund_tres = 0.01, cols = mycols)
 ```
+
+<br>
+
+----
 
 #### Grouped
 
-```{r}
-bar_group(ps_foc, "order", cols)
+```{r, fig.asp = 1.2, fig.width = 4, out.width="50%"}
+pbar(ps_prop, "order", abund_tres = 0.01, xvar = "treatment", cols = mycols)
 ```
+
+<br>
+
+----
+
+#### Grouped -- no NC
+
+```{r, fig.asp = 1.25, fig.width = 3.8, out.width="48%"}
+pbar(ps_prop_noNC, "order", abund_tres = 0.01, xvar = "treatment", cols = mycols)
+```
+
+<br>
+
+----
 
 ### Family {.tabset .tabset-fade .tabset-pills}
 
-Only showing families with a mean proportional abundance higher than 0.01.
-
-```{r}
-ps_foc <- tax_glom(ps_prop, taxrank = "family", NArm = FALSE)
-ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
-cols <- distinctColorPalette(ntaxa(ps_foc))
-```
+Families with a mean proportional abundance below 1% have been lumped into
+the category `other (rare)`.
 
 #### By sample
 
 ```{r}
-bar_indiv(ps_foc, "family", cols)
+pbar(ps_prop, "family", abund_tres = 0.01, cols = mycols)
 ```
+
+<br>
+
+----
 
 #### Grouped
 
-```{r}
-bar_group(ps_foc, "family", cols)
+```{r, fig.asp = 1.2, fig.width = 4, out.width="50%"}
+pbar(ps_prop, "family", abund_tres = 0.01, xvar = "treatment", cols = mycols)
 ```
+
+
+<br>
+
+----
+
+#### Grouped -- no NC
+
+```{r, fig.asp = 1.25, fig.width = 3.8, out.width="48%"}
+pbar(ps_prop_noNC, "family", abund_tres = 0.01, xvar = "treatment", cols = mycols)
+```
+
+<br>
+
+----
 
 ### Genus {.tabset .tabset-fade .tabset-pills}
 
-Only showing genera with a mean proportional abundance higher than 0.1.
-
-```{r}
-ps_foc <- tax_glom(ps_prop, taxrank = "genus", NArm = FALSE)
-ps_foc <- subset_taxa(ps_foc, (taxa_sums(ps_foc) / nsamples(ps_foc)) > 0.01)
-cols <- distinctColorPalette(ntaxa(ps_foc))
-```
+Genera with a mean proportional abundance below 1.5% have been lumped into
+the category `other (rare)`.
 
 #### By sample
 
 ```{r}
-bar_indiv(ps_foc, "genus", cols)
+pbar(ps_prop, "genus", abund_tres = 0.015, cols = mycols)
 ```
+
+<br>
+
+----
 
 #### Grouped
 
-```{r}
-bar_group(ps_foc, "genus", cols)
+```{r, fig.asp = 1.1, fig.width = 4.4, out.width="55%"}
+pbar(ps_prop, "genus", abund_tres = 0.015, xvar = "treatment", cols = mycols)
 ```
 
 <br>
 
 ------
+
+#### Grouped -- no NC
+
+```{r, fig.asp = 1.15, fig.width = 4.1, out.width="53%"}
+pbar(ps_prop_noNC, "genus", abund_tres = 0.015, xvar = "treatment", cols = mycols)
+```
+
+<br>
+
+----
 
 ## Focal taxa
 
@@ -481,6 +535,10 @@ lacto_tax <- tax %>% filter(order == "Lactobacillales")
 make_dt(lacto_tax, simple_mode = TRUE)
 ```
 
+<br>
+
+----
+
 #### Heatmap
 
 ```{r}
@@ -491,6 +549,10 @@ plot_heatmap(lacto_tax$ASV,
              count_mat = counts_norm, meta_df = meta,
              groups = c("treatment"), annot_colors = mycols)
 ```
+
+<br>
+
+----
 
 #### Boxplots
 
@@ -535,6 +597,10 @@ plot_heatmap(IDs = topASV_df$ASV[1:20],
              log_transform = TRUE)
 ```
 
+<br>
+
+----
+
 ### Table with top-50
 
 Containing the top-50 most abundant ASVs.
@@ -544,6 +610,10 @@ Containing the top-50 most abundant ASVs.
 ```{r}
 make_dt(topASV_df[1:50, ], pageLength = 15)
 ```
+
+<br>
+
+----
 
 ### ASV abundance distribution
 
@@ -602,17 +672,29 @@ Barplots showing the number of distinct ASVs in each taxonomic group.
 plot_asv_cnt(tax_lev = "phylum", tax_df = tax)
 ```
 
+<br>
+
+----
+
 ### Class
 
 ```{r, out.width="85%"}
 plot_asv_cnt(tax_lev = "class", tax_df = tax)
 ```
 
+<br>
+
+----
+
 ### Order
 
 ```{r, out.width="85%"}
 plot_asv_cnt(tax_lev = "order", tax_df = tax)
 ```
+
+<br>
+
+----
 
 ### Family
 
